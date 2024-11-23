@@ -190,6 +190,11 @@ export class ChatwootService {
       const data = {
         type: 'api',
         webhook_url: webhookUrl,
+        additional_attributes: {
+          phone: number,
+          type: 'whatsapp',
+          provider: 'ruut_native_whatsapp',
+        },
       };
 
       const inbox = await client.inboxes.create({
