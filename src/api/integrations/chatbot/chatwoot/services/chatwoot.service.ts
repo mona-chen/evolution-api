@@ -193,6 +193,7 @@ export class ChatwootService {
         additional_attributes: {
           phone: number,
           type: 'whatsapp',
+          instance_name: instance.instanceName,
           provider: 'ruut_native_whatsapp',
         },
       };
