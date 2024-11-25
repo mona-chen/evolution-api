@@ -44,6 +44,7 @@ export class ChatwootService {
   private readonly logger = new Logger('ChatwootService');
 
   private provider: any;
+  private chatwoot_channel: any = {};
 
   constructor(
     private readonly waMonitor: WAMonitoringService,
@@ -113,7 +114,7 @@ export class ChatwootService {
       this.logger.log('Auto create chatwoot instance');
       const urlServer = this.configService.get<HttpServer>('SERVER').URL;
 
-      await this.initInstanceChatwoot(
+      this.chatwoot_channel = await this.initInstanceChatwoot(
         instance,
         data.nameInbox ?? instance.instanceName.split('-cwId-')[0],
         `${urlServer}/chatwoot/webhook/${encodeURIComponent(instance.instanceName)}`,
@@ -123,7 +124,7 @@ export class ChatwootService {
         data.logo,
       );
     }
-    return data;
+    return { ...data, ...this.chatwoot_channel };
   }
 
   public async find(instance: InstanceDto): Promise<ChatwootDto> {
@@ -184,6 +185,7 @@ export class ChatwootService {
     const checkDuplicate = findInbox.payload.map((inbox) => inbox.name).includes(inboxName);
 
     let inboxId: number;
+    let inboxData: inbox;
 
     this.logger.log('Creating chatwoot inbox');
     if (!checkDuplicate) {
@@ -212,6 +214,7 @@ export class ChatwootService {
       }
 
       inboxId = inbox.id;
+      inboxData = inbox;
     } else {
       const inbox = findInbox.payload.find((inbox) => inbox.name === inboxName);
 
@@ -221,6 +224,7 @@ export class ChatwootService {
       }
 
       inboxId = inbox.id;
+      inboxData = inbox;
     }
     this.logger.log(`Inbox created - inboxId: ${inboxId}`);
 
@@ -289,6 +293,9 @@ export class ChatwootService {
       this.logger.log('Init message sent');
     }
 
+    if (inboxData) {
+      return inboxData;
+    }
     return true;
   }
 

@@ -50,7 +50,9 @@ export class InstanceController {
         throw new BadRequestException('Invalid integration');
       }
 
+
       const instanceId = v4();
+      let chatwoot_channel;
 
       instanceData.instanceId = instanceId;
 
@@ -210,7 +212,7 @@ export class InstanceController {
       const urlServer = this.configService.get<HttpServer>('SERVER').URL;
 
       try {
-        this.chatwootService.create(instance, {
+        chatwoot_channel = await this.chatwootService.create(instance, {
           enabled: true,
           accountId: instanceData.chatwootAccountId,
           token: instanceData.chatwootToken,
@@ -273,6 +275,7 @@ export class InstanceController {
           number: instanceData.number,
           nameInbox: instanceData.chatwootNameInbox ?? instance.instanceName,
           webhookUrl: `${urlServer}/chatwoot/webhook/${encodeURIComponent(instance.instanceName)}`,
+          ...chatwoot_channel,
         },
       };
     } catch (error) {
