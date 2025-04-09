@@ -29,7 +29,7 @@ services:
     volumes:
       - evolution_redis:/data
     ports:
-      - 6379:6379
+      - 6378:6379
 
   # postgres:
   #   container_name: postgres
