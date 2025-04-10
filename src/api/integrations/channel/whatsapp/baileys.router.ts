@@ -14,7 +14,7 @@ export class BaileysRouter extends RouterBroker {
           request: req,
           schema: instanceSchema,
           ClassRef: InstanceDto,
-          execute: (instance) => baileysController.onWhatsapp(instance, req.body),
+          execute: (instance) => baileysController?.onWhatsapp(instance, req.body),
         });
 
         res.status(HttpStatus.OK).json(response);
