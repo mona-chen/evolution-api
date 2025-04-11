@@ -6,10 +6,8 @@ set -e
 # Create pgbouncer config from environment variables
 cat > /etc/pgbouncer/pgbouncer.ini << EOF
 [databases]
+${DB_NAME:-evolution} = host=${DB_HOST} port=${DB_PORT:-5432} user=${DB_USER} password=${DB_PASSWORD} dbname=${DB_NAME:-evolution}
 
-MD5_PASS="md5$(echo -n "${DB_PASSWORD}${DB_USER}" | md5sum | awk '{print $1}')"
-cat > /etc/pgbouncer/userlist.txt << EOF
-"${DB_USER}" "${MD5_PASS}"
 
 [pgbouncer]
 listen_addr = 0.0.0.0
