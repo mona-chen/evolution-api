@@ -1,0 +1,29 @@
+version: '3'
+
+services:
+  pgbouncer:
+    container_name: pgbouncer
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - pgbouncer-net
+    ports:
+      - ${PGBOUNCER_PORT:-6432}:6432
+    environment:
+      - DB_USER=${POSTGRES_USER:-user}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-pass}
+      - DB_HOST=${POSTGRES_HOST:-your-external-postgres}
+      - DB_PORT=${POSTGRES_PORT:-5432}
+      - DB_NAME=${POSTGRES_DB:-evolution}
+      - POOL_MODE=${POOL_MODE:-transaction}
+      - MAX_CLIENT_CONN=${MAX_CLIENT_CONN:-1000}
+      - DEFAULT_POOL_SIZE=${DEFAULT_POOL_SIZE:-20}
+      - RESERVE_POOL_SIZE=${RESERVE_POOL_SIZE:-10}
+      - RESERVE_POOL_TIMEOUT=${RESERVE_POOL_TIMEOUT:-5}
+    restart: always
+
+networks:
+  pgbouncer-net:
+    name: pgbouncer-net
+    driver: bridge
