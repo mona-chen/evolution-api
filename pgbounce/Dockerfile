@@ -10,6 +10,7 @@ RUN chown -R postgres:postgres /etc/pgbouncer /var/log/pgbouncer /var/run/pgboun
 # Set up the entry point script
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+RUN useradd -ms /bin/bash postgres
 
 USER postgres
 EXPOSE 6432

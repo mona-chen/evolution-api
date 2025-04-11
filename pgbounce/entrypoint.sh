@@ -1,10 +1,15 @@
 #!/bin/bash
 set -e
 
+# ${DB_NAME:-evolution} = host=${DB_HOST} port=${DB_PORT:-5432} user=${DB_USER} password=${DB_PASSWORD} dbname=${DB_NAME:-evolution}
+
 # Create pgbouncer config from environment variables
 cat > /etc/pgbouncer/pgbouncer.ini << EOF
 [databases]
-${DB_NAME:-evolution} = host=${DB_HOST} port=${DB_PORT:-5432} user=${DB_USER} password=${DB_PASSWORD} dbname=${DB_NAME:-evolution}
+
+MD5_PASS="md5$(echo -n "${DB_PASSWORD}${DB_USER}" | md5sum | awk '{print $1}')"
+cat > /etc/pgbouncer/userlist.txt << EOF
+"${DB_USER}" "${MD5_PASS}"
 
 [pgbouncer]
 listen_addr = 0.0.0.0
@@ -25,6 +30,7 @@ server_check_delay = 30
 server_check_query = select 1
 server_lifetime = 3600
 server_idle_timeout = 600
+verbose = 1
 EOF
 
 # Create authentication file
