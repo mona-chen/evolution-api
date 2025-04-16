@@ -20,8 +20,6 @@ COPY ./manager ./manager
 COPY ./.env.example ./.env
 COPY ./runWithProvider.js ./
 COPY ./tsup.config.ts ./
-COPY ./nginx ./nginx
-COPY ./scripts ./scripts
 
 COPY ./Docker ./Docker
 
@@ -34,7 +32,7 @@ RUN npm run build
 FROM node:20-alpine AS final
 
 RUN apk update && \
-    apk add tzdata ffmpeg bash openssl
+    apk add tzdata ffmpeg bash openssl curl
 
 ENV TZ=America/Sao_Paulo
 
@@ -52,8 +50,6 @@ COPY --from=builder /evolution/.env ./.env
 COPY --from=builder /evolution/Docker ./Docker
 COPY --from=builder /evolution/runWithProvider.js ./runWithProvider.js
 COPY --from=builder /evolution/tsup.config.ts ./tsup.config.ts
-COPY --from=builder /evolution/nginx ./nginx 
-COPY --from=builder /evolution/scripts ./scripts 
 
 ENV DOCKER_ENV=true
 
