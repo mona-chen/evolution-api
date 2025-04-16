@@ -18,7 +18,7 @@ services:
     expose:
       - 5858
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5858"]
+      test: ["CMD", "curl", "-f", "http://127.17.0.1:5858"]
       interval: 1m30s
       timeout: 30s
       retries: 5
