@@ -53,7 +53,7 @@ COPY --from=builder /evolution/Docker ./Docker
 COPY --from=builder /evolution/runWithProvider.js ./runWithProvider.js
 COPY --from=builder /evolution/tsup.config.ts ./tsup.config.ts
 COPY --from=builder /evolution/nginx ./nginx 
-COPY --from=builder /evolution/script ./scripts 
+COPY --from=builder /evolution/scripts ./scripts 
 
 ENV DOCKER_ENV=true
 
