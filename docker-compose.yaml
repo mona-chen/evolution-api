@@ -1,3 +1,5 @@
+version: '3'
+
 services:
   api:
     container_name: evolution_api
@@ -28,6 +30,7 @@ services:
     networks:
       - evolution-net
     container_name: redis
+    restart: always
     command: >
       redis-server 
       --port 6379 
@@ -41,6 +44,36 @@ services:
       - evolution_redis:/data
     ports:
       - ${REDIS_PORT:-6378}:6379
+
+  nginx-failover:
+    image: nginx:latest
+    container_name: nginx_failover
+    restart: always
+    ports:
+      - "8080:80"  # Alternative port for failover
+      - "8443:443" # Alternative SSL port for failover
+    volumes:
+      - ./nginx/conf:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx/www:/usr/share/nginx/html
+    networks:
+      - evolution-net
+    depends_on:
+      - api
+
+  domain-watcher:
+    image: alpine:latest
+    container_name: domain_watcher
+    restart: always
+    volumes:
+      - ./scripts:/scripts
+    networks:
+      - evolution-net
+    entrypoint: /bin/sh
+    command: -c "apk add --no-cache curl bind-tools && chmod +x /scripts/check_domain.sh && /scripts/check_domain.sh"
+    depends_on:
+      - api
+      - nginx-failover
 
 volumes:
   evolution_instances:
