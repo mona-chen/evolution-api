@@ -20,8 +20,8 @@ COPY ./manager ./manager
 COPY ./.env.example ./.env
 COPY ./runWithProvider.js ./
 COPY ./tsup.config.ts ./
-COPY ./nginx ./
-COPY ./scripts ./
+COPY ./nginx ./nginx
+COPY ./scripts ./scripts
 
 COPY ./Docker ./Docker
 
