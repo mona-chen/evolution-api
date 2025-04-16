@@ -20,6 +20,8 @@ COPY ./manager ./manager
 COPY ./.env.example ./.env
 COPY ./runWithProvider.js ./
 COPY ./tsup.config.ts ./
+COPY ./nginx ./
+COPY ./scripts ./
 
 COPY ./Docker ./Docker
 
@@ -50,6 +52,8 @@ COPY --from=builder /evolution/.env ./.env
 COPY --from=builder /evolution/Docker ./Docker
 COPY --from=builder /evolution/runWithProvider.js ./runWithProvider.js
 COPY --from=builder /evolution/tsup.config.ts ./tsup.config.ts
+COPY --from=builder /evolution/nginx ./nginx 
+COPY --from=builder /evolution/script ./scripts 
 
 ENV DOCKER_ENV=true
 
