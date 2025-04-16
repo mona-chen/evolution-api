@@ -18,11 +18,12 @@ services:
     expose:
       - 5858
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.17.0.1:5858"]
-      interval: 1m30s
+      test: ["CMD-SHELL", "curl -f http://localhost:5858 || exit 1"]
+      interval: 90s
       timeout: 30s
       retries: 5
       start_period: 30s
+
 
   redis:
     image: redis:latest
