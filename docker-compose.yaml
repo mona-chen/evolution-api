@@ -15,6 +15,9 @@ services:
       - evolution_instances:/evolution/instances
     networks:
       - evolution-net
+    environment:
+      - SERVICE_FQDN_EVO_5858
+      - SERVER_URL=$SERVICE_FQDN_EVO
     env_file:
       - .env
     expose:
