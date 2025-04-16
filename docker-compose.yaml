@@ -50,8 +50,8 @@ services:
     container_name: nginx_failover
     restart: always
     ports:
-      - "8080:80"  # Alternative port for failover
-      - "8443:443" # Alternative SSL port for failover
+      - "9080:80"  # Alternative port for failover
+      - "9443:443" # Alternative SSL port for failover
     volumes:
       - ./nginx/conf:/etc/nginx/conf.d
       - ./nginx/ssl:/etc/nginx/ssl
