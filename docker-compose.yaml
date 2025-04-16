@@ -17,6 +17,12 @@ services:
       - .env
     expose:
       - 5858
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5858"]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
 
   redis:
     image: redis:latest
