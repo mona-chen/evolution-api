@@ -17,6 +17,11 @@ services:
       - .env
     expose:
       - 5858
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5858/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   redis:
     image: redis:latest
@@ -27,7 +32,7 @@ services:
       redis-server 
       --port 6379 
       --appendonly yes
-      --maxmemory 256mb
+      --maxmemory 2gb
       --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
