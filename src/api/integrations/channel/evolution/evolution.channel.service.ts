@@ -498,6 +498,10 @@ export class EvolutionStartupService extends ChannelStartupService {
         }
       }
 
+      if (options?.echo_id) {
+        messageRaw.key.echo_id = options.echo_id;
+      }
+
       this.logger.log(messageRaw);
 
       this.sendDataWebhook(Events.SEND_MESSAGE, messageRaw);
@@ -542,6 +546,7 @@ export class EvolutionStartupService extends ChannelStartupService {
         linkPreview: data?.linkPreview,
         mentionsEveryOne: data?.mentionsEveryOne,
         mentioned: data?.mentioned,
+        echo_id: data?.echo_id,
       },
       null,
       isIntegration,
@@ -607,6 +612,7 @@ export class EvolutionStartupService extends ChannelStartupService {
         linkPreview: data?.linkPreview,
         mentionsEveryOne: data?.mentionsEveryOne,
         mentioned: data?.mentioned,
+        echo_id: data?.echo_id,
       },
       file,
       isIntegration,
@@ -704,6 +710,7 @@ export class EvolutionStartupService extends ChannelStartupService {
         linkPreview: data?.linkPreview,
         mentionsEveryOne: data?.mentionsEveryOne,
         mentioned: data?.mentioned,
+        echo_id: data?.echo_id,
       },
       file,
       isIntegration,

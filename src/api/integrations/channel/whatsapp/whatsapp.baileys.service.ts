@@ -1566,7 +1566,7 @@ export class BaileysStartupService extends ChannelStartupService {
             remoteJid: key.remoteJid,
             fromMe: key.fromMe,
             participant: key?.remoteJid,
-            status: status[update.status],
+            status: status[update.status] || 'PENDING',
             pollUpdates,
             instanceId: this.instanceId,
           };
@@ -2374,6 +2374,11 @@ export class BaileysStartupService extends ChannelStartupService {
 
       this.logger.log(messageRaw);
 
+      // Add echo_id to key if present in options
+      if (options?.echo_id) {
+        messageRaw.key.echo_id = options.echo_id;
+      }
+
       this.sendDataWebhook(Events.SEND_MESSAGE, messageRaw);
 
       if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && isIntegration) {
@@ -2477,6 +2482,7 @@ export class BaileysStartupService extends ChannelStartupService {
         linkPreview: data?.linkPreview,
         mentionsEveryOne: data?.mentionsEveryOne,
         mentioned: data?.mentioned,
+        echo_id: data?.echo_id,
       },
       isIntegration,
     );

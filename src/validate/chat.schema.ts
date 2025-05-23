@@ -248,6 +248,7 @@ export const messageUpSchema: JSONSchema7 = {
       type: 'object',
       properties: {
         _id: { type: 'string' },
+        suppliedId: { type: 'string' },
         remoteJid: { type: 'string' },
         id: { type: 'string' },
         fromMe: { type: 'boolean', enum: [true, false] },
@@ -257,7 +258,7 @@ export const messageUpSchema: JSONSchema7 = {
           enum: ['ERROR', 'PENDING', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED'],
         },
       },
-      ...isNotEmpty('_id', 'remoteJid', 'id', 'status'),
+      ...isNotEmpty('remoteJid', 'id', 'status'),
     },
     limit: { type: 'integer' },
   },

@@ -14,6 +14,7 @@ export class Options {
   mentionsEveryOne?: boolean;
   mentioned?: string[];
   webhookUrl?: string;
+  echo_id?: string;
 }
 
 export class MediaMessage {
@@ -49,9 +50,12 @@ export class Metadata {
 
 export class SendTextDto extends Metadata {
   text: string;
+  echo_id?: string;
 }
+
 export class SendPresence extends Metadata {
   text: string;
+  echo_id?: string;
 }
 
 export class SendStatusDto extends Metadata {
@@ -62,6 +66,7 @@ export class SendStatusDto extends Metadata {
   caption?: string;
   backgroundColor?: string;
   font?: number;
+  echo_id?: string;
 }
 
 export class SendPollDto extends Metadata {
@@ -69,6 +74,7 @@ export class SendPollDto extends Metadata {
   selectableCount: number;
   values: string[];
   messageSecret?: Uint8Array;
+  echo_id?: string;
 }
 
 export type MediaType = 'image' | 'document' | 'video' | 'audio' | 'ptv';
@@ -81,18 +87,22 @@ export class SendMediaDto extends Metadata {
   fileName?: string;
   // url or base64
   media: string;
+  echo_id?: string;
 }
 
 export class SendPtvDto extends Metadata {
   video: string;
+  echo_id?: string;
 }
 
 export class SendStickerDto extends Metadata {
   sticker: string;
+  echo_id?: string;
 }
 
 export class SendAudioDto extends Metadata {
   audio: string;
+  echo_id?: string;
 }
 
 export type TypeButton = 'reply' | 'copy' | 'url' | 'call' | 'pix';
@@ -118,6 +128,7 @@ export class SendButtonsDto extends Metadata {
   description?: string;
   footer?: string;
   buttons: Button[];
+  echo_id?: string;
 }
 
 export class SendLocationDto extends Metadata {
@@ -125,6 +136,7 @@ export class SendLocationDto extends Metadata {
   longitude: number;
   name?: string;
   address?: string;
+  echo_id?: string;
 }
 
 class Row {
@@ -132,16 +144,19 @@ class Row {
   description: string;
   rowId: string;
 }
+
 class Section {
   title: string;
   rows: Row[];
 }
+
 export class SendListDto extends Metadata {
   title: string;
   description?: string;
   footerText?: string;
   buttonText: string;
   sections: Section[];
+  echo_id?: string;
 }
 
 export class ContactMessage {
@@ -158,9 +173,12 @@ export class SendTemplateDto extends Metadata {
   language: string;
   components: any;
   webhookUrl?: string;
+  echo_id?: string;
 }
+
 export class SendContactDto extends Metadata {
   contact: ContactMessage[];
+  echo_id?: string;
 }
 
 export class SendReactionDto {

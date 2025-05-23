@@ -1191,6 +1191,15 @@ export class ChatwootService {
     try {
       await new Promise((resolve) => setTimeout(resolve, 500));
 
+      // Add source_id check to prevent duplicate messages
+      if (body.source_id) {
+        const messageAlreadySaved = await chatwootImport.getExistingSourceIds([body.source_id]);
+        if (messageAlreadySaved && messageAlreadySaved.size > 0) {
+          this.logger.warn('Message already saved on chatwoot');
+          return { message: 'bot' };
+        }
+      }
+
       const client = await this.clientCw(instance);
 
       if (!client) {
