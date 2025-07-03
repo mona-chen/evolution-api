@@ -243,7 +243,17 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public async logoutInstance() {
-    await this.client?.logout('Log out instance: ' + this.instanceName);
+    try {
+      await this.client?.logout('Log out instance: ' + this.instanceName);
+    } catch (err) {
+      // If the error is a 'Connection Closed' error, treat as already disconnected
+      if (err && err.message && err.message.includes('Connection Closed')) {
+        // Emit no.connection event to trigger state clearing and dashboard update
+        this.eventEmitter.emit('no.connection', this.instance.name);
+      } else {
+        throw err;
+      }
+    } 
 
     this.client?.ws?.close();
 
@@ -490,7 +500,7 @@ export class BaileysStartupService extends ChannelStartupService {
             status: 'open',
           },
         );
-        this.syncChatwootLostMessages();
+        await this.syncChatwootLostMessages();
       }
 
       this.sendDataWebhook(Events.CONNECTION_UPDATE, {
