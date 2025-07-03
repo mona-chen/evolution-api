@@ -3239,8 +3239,8 @@ export class BaileysStartupService extends ChannelStartupService {
 
           const numberJid = numberVerified?.jid || user.jid;
           const lid =
-            typeof numberVerified?.lid === 'string'
-              ? numberVerified.lid
+            typeof (numberVerified as any)?.lid === 'string'
+              ? (numberVerified as any).lid
               : numberJid.includes('@lid')
                 ? numberJid.split('@')[1]
                 : undefined;
