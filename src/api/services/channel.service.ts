@@ -27,7 +27,11 @@ export class ChannelStartupService {
     public readonly eventEmitter: EventEmitter2,
     public readonly prismaRepository: PrismaRepository,
     public readonly chatwootCache: CacheService,
-  ) {}
+  ) {
+    this.openaiService = new OpenaiService(waMonitor, this.prismaRepository, this.configService);
+    this.typebotService = new TypebotService(waMonitor, this.configService, this.prismaRepository, this.openaiService);
+    this.difyService = new DifyService(waMonitor, this.prismaRepository, this.configService, this.openaiService);
+  }
 
   public readonly logger = new Logger('ChannelStartupService');
 
@@ -728,18 +732,25 @@ export class ChannelStartupService {
         SELECT DISTINCT ON ("Message"."key"->>'remoteJid') 
           "Contact"."id" as "contactId",
           "Message"."key"->>'remoteJid' as "remoteJid",
-          COALESCE("Contact"."pushName", "Message"."pushName") as "pushName",
+          CASE 
+            WHEN "Message"."key"->>'remoteJid' LIKE '%@g.us' THEN COALESCE("Chat"."name", "Contact"."pushName")
+            ELSE COALESCE("Contact"."pushName", "Message"."pushName")
+          END as "pushName",
           "Contact"."profilePicUrl",
           COALESCE(
             to_timestamp("Message"."messageTimestamp"::double precision), 
             "Contact"."updatedAt"
           ) as "updatedAt",
+          "Chat"."name" as "pushName",
           "Chat"."createdAt" as "windowStart",
           "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
           CASE WHEN "Chat"."createdAt" + INTERVAL '24 hours' > NOW() THEN true ELSE false END as "windowActive",
           "Message"."id" AS lastMessageId,
           "Message"."key" AS lastMessage_key,
-          "Message"."pushName" AS lastMessagePushName,
+          CASE
+            WHEN "Message"."key"->>'fromMe' = 'true' THEN 'Você'
+            ELSE "Message"."pushName"
+          END AS lastMessagePushName,
           "Message"."participant" AS lastMessageParticipant,
           "Message"."messageType" AS lastMessageMessageType,
           "Message"."message" AS lastMessageMessage,
@@ -764,36 +775,36 @@ export class ChannelStartupService {
     `;
 
     if (results && isArray(results) && results.length > 0) {
-      const mappedResults = results.map((item) => {
-        const lastMessage = item.lastMessageId
+      const mappedResults = results.map((contact) => {
+        const lastMessage = contact.lastmessageid
           ? {
-              id: item.lastMessageId,
-              key: item.lastMessage_key,
-              pushName: item.lastMessagePushName,
-              participant: item.lastMessageParticipant,
-              messageType: item.lastMessageMessageType,
-              message: item.lastMessageMessage,
-              contextInfo: item.lastMessageContextInfo,
-              source: item.lastMessageSource,
-              messageTimestamp: item.lastMessageMessageTimestamp,
-              instanceId: item.lastMessageInstanceId,
-              sessionId: item.lastMessageSessionId,
-              status: item.lastMessageStatus,
+              id: contact.lastmessageid,
+              key: contact.lastmessage_key,
+              pushName: contact.lastmessagepushname,
+              participant: contact.lastmessageparticipant,
+              messageType: contact.lastmessagemessagetype,
+              message: contact.lastmessagemessage,
+              contextInfo: contact.lastmessagecontextinfo,
+              source: contact.lastmessagesource,
+              messageTimestamp: contact.lastmessagemessagetimestamp,
+              instanceId: contact.lastmessageinstanceid,
+              sessionId: contact.lastmessagesessionid,
+              status: contact.lastmessagestatus,
             }
           : undefined;
 
         return {
-          id: item.contactId || null,
-          remoteJid: item.remoteJid,
-          pushName: item.pushName,
-          profilePicUrl: item.profilePicUrl,
-          updatedAt: item.updatedAt,
-          windowStart: item.windowStart,
-          windowExpires: item.windowExpires,
-          windowActive: item.windowActive,
+          id: contact.contactid || null,
+          remoteJid: contact.remotejid,
+          pushName: contact.pushname,
+          profilePicUrl: contact.profilepicurl,
+          updatedAt: contact.updatedat,
+          windowStart: contact.windowstart,
+          windowExpires: contact.windowexpires,
+          windowActive: contact.windowactive,
           lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
           unreadCount: 0,
-          isSaved: !!item.contactId,
+          isSaved: !!contact.contactid,
         };
       });
 

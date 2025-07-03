@@ -95,6 +95,7 @@ export type EventsRabbitmq = {
 export type Rabbitmq = {
   ENABLED: boolean;
   URI: string;
+  FRAME_MAX: number;
   EXCHANGE_NAME: string;
   GLOBAL_ENABLED: boolean;
   EVENTS: EventsRabbitmq;
@@ -232,7 +233,21 @@ export type CacheConfLocal = {
   TTL: number;
 };
 export type SslConf = { PRIVKEY: string; FULLCHAIN: string };
-export type Webhook = { GLOBAL?: GlobalWebhook; EVENTS: EventsWebhook };
+export type Webhook = {
+  GLOBAL?: GlobalWebhook;
+  EVENTS: EventsWebhook;
+  REQUEST?: {
+    TIMEOUT_MS?: number;
+  };
+  RETRY?: {
+    MAX_ATTEMPTS?: number;
+    INITIAL_DELAY_SECONDS?: number;
+    USE_EXPONENTIAL_BACKOFF?: boolean;
+    MAX_DELAY_SECONDS?: number;
+    JITTER_FACTOR?: number;
+    NON_RETRYABLE_STATUS_CODES?: number[];
+  };
+};
 export type Pusher = { ENABLED: boolean; GLOBAL?: GlobalPusher; EVENTS: EventsPusher };
 export type ConfigSessionPhone = { CLIENT: string; NAME: string; VERSION: string };
 export type QrCode = { LIMIT: number; COLOR: string };
@@ -253,6 +268,9 @@ export type Chatwoot = {
 };
 export type Openai = { ENABLED: boolean; API_KEY_GLOBAL?: string };
 export type Dify = { ENABLED: boolean };
+export type N8n = { ENABLED: boolean };
+export type Evoai = { ENABLED: boolean };
+export type Flowise = { ENABLED: boolean };
 
 export type S3 = {
   ACCESS_KEY: string;
@@ -292,6 +310,9 @@ export interface Env {
   CHATWOOT: Chatwoot;
   OPENAI: Openai;
   DIFY: Dify;
+  N8N: N8n;
+  EVOAI: Evoai;
+  FLOWISE: Flowise;
   CACHE: CacheConf;
   S3?: S3;
   AUTHENTICATION: Auth;
@@ -373,6 +394,7 @@ export class ConfigService {
         PREFIX_KEY: process.env?.RABBITMQ_PREFIX_KEY,
         EXCHANGE_NAME: process.env?.RABBITMQ_EXCHANGE_NAME || 'evolution_exchange',
         URI: process.env.RABBITMQ_URI || '',
+        FRAME_MAX: Number.parseInt(process.env.RABBITMQ_FRAME_MAX) || 8192,
         EVENTS: {
           APPLICATION_STARTUP: process.env?.RABBITMQ_EVENTS_APPLICATION_STARTUP === 'true',
           INSTANCE_CREATE: process.env?.RABBITMQ_EVENTS_INSTANCE_CREATE === 'true',
@@ -551,6 +573,19 @@ export class ConfigService {
           ERRORS: process.env?.WEBHOOK_EVENTS_ERRORS === 'true',
           ERRORS_WEBHOOK: process.env?.WEBHOOK_EVENTS_ERRORS_WEBHOOK || '',
         },
+        REQUEST: {
+          TIMEOUT_MS: Number.parseInt(process.env?.WEBHOOK_REQUEST_TIMEOUT_MS) || 30000,
+        },
+        RETRY: {
+          MAX_ATTEMPTS: Number.parseInt(process.env?.WEBHOOK_RETRY_MAX_ATTEMPTS) || 10,
+          INITIAL_DELAY_SECONDS: Number.parseInt(process.env?.WEBHOOK_RETRY_INITIAL_DELAY_SECONDS) || 5,
+          USE_EXPONENTIAL_BACKOFF: process.env?.WEBHOOK_RETRY_USE_EXPONENTIAL_BACKOFF !== 'false',
+          MAX_DELAY_SECONDS: Number.parseInt(process.env?.WEBHOOK_RETRY_MAX_DELAY_SECONDS) || 300,
+          JITTER_FACTOR: Number.parseFloat(process.env?.WEBHOOK_RETRY_JITTER_FACTOR) || 0.2,
+          NON_RETRYABLE_STATUS_CODES: process.env?.WEBHOOK_RETRY_NON_RETRYABLE_STATUS_CODES?.split(',').map(Number) || [
+            400, 401, 403, 404, 422,
+          ],
+        },
       },
       CONFIG_SESSION_PHONE: {
         CLIENT: process.env?.CONFIG_SESSION_PHONE_CLIENT || 'Evolution API',
@@ -586,6 +621,15 @@ export class ConfigService {
       },
       DIFY: {
         ENABLED: process.env?.DIFY_ENABLED === 'true',
+      },
+      N8N: {
+        ENABLED: process.env?.N8N_ENABLED === 'true',
+      },
+      EVOAI: {
+        ENABLED: process.env?.EVOAI_ENABLED === 'true',
+      },
+      FLOWISE: {
+        ENABLED: process.env?.FLOWISE_ENABLED === 'true',
       },
       CACHE: {
         REDIS: {
