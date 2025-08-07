@@ -13,7 +13,7 @@ COPY ./package*.json ./
 COPY ./tsconfig.json ./
 COPY ./tsup.config.ts ./
 
-RUN yarn install --ignore-engines --ignore-scripts
+RUN npm install --legacy-peer-deps --ignore-scripts || npm install --legacy-peer-deps --force
 
 COPY ./src ./src
 COPY ./public ./public
