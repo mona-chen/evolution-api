@@ -13,7 +13,7 @@ COPY ./package*.json ./
 COPY ./tsconfig.json ./
 COPY ./tsup.config.ts ./
 
-RUN npm install --legacy-peer-deps --ignore-scripts || npm install --legacy-peer-deps --force
+RUN npm install --legacy-peer-deps
 
 COPY ./src ./src
 COPY ./public ./public
