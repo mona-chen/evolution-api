@@ -1,8 +1,7 @@
 FROM node:20-alpine AS builder
 
 RUN apk update && \
-    apk add --no-cache git ffmpeg wget curl bash openssl && \
-    npm install -g yarn
+    apk add --no-cache git ffmpeg wget curl bash openssl
 
 LABEL version="2.3.1" description="Api to control whatsapp features through http requests." 
 LABEL maintainer="Davidson Gomes" git="https://github.com/DavidsonGomes"
