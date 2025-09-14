@@ -127,6 +127,48 @@ export class ChatwootService {
     return { ...data, ...this.chatwoot_channel };
   }
 
+  private async checkExistingMessage(sourceId: string): Promise<any> {
+    try {
+      // Use HTTP request to check if message exists in Ruut backend
+      const response = await axios.get(`${this.provider.url}/api/v1/messages/check_duplicate`, {
+        headers: {
+          'api_access_token': this.provider.token,
+          'Content-Type': 'application/json',
+        },
+        params: {
+          source_id: sourceId
+        }
+      });
+
+      return response.data?.exists ? response.data.message : null;
+    } catch (error) {
+      // If the endpoint doesn't exist or fails, return null to allow message creation
+      this.logger.verbose(`[CHATWOOT] Could not check existing message: ${error.message}`);
+      return null;
+    }
+  }
+
+  private async updateMessage(messageId: number, updateData: { content: string }): Promise<any> {
+    try {
+      const response = await axios.patch(
+        `${this.provider.url}/api/v1/messages/${messageId}`,
+        updateData,
+        {
+          headers: {
+            'api_access_token': this.provider.token,
+            'Content-Type': 'application/json',
+          },
+          timeout: 5000,
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      this.logger.warn(`[CHATWOOT] Error updating message: ${error.message}`);
+      return null;
+    }
+  }
+
   public async find(instance: InstanceDto): Promise<ChatwootDto> {
     try {
       return await this.waMonitor.waInstances[instance.instanceName].findChatwoot();
@@ -1928,6 +1970,35 @@ export class ChatwootService {
         return;
       }
 
+      // Add deduplication check at the very beginning
+      if (body?.key?.id) {
+        const messageId = body.key.id;
+        const redisKey = `chatwoot_message_processing:${messageId}`;
+
+        // Check if this message is already being processed
+        const isProcessing = await this.cache.get(redisKey);
+        if (isProcessing) {
+          this.logger.info(`[CHATWOOT] Message ${messageId} is already being processed, skipping`);
+          return null;
+        }
+
+        // Set a lock for 30 seconds to prevent duplicate processing
+        await this.cache.set(redisKey, 'processing', 30);
+
+        try {
+          // Check if message already exists in database by source_id
+          const sourceId = `WAID:${messageId}`;
+          const existingMessage = await this.checkExistingMessage(sourceId);
+          if (existingMessage) {
+            this.logger.info(`[CHATWOOT] Message with source_id ${sourceId} already exists, skipping creation`);
+            await this.cache.delete(redisKey);
+            return existingMessage;
+          }
+        } catch (error) {
+          this.logger.error(`[CHATWOOT] Error checking existing message: ${error.message}`);
+        }
+      }
+
       const waInstance = this.waMonitor.waInstances[instance.instanceName];
 
       if (!waInstance) {
@@ -2247,6 +2318,14 @@ export class ChatwootService {
 
           return send;
         } else {
+          // Check one more time before creating the message to prevent duplicates
+          const sourceId = 'WAID:' + body.key.id;
+          const finalDuplicateCheck = await this.checkExistingMessage(sourceId);
+          if (finalDuplicateCheck) {
+            this.logger.info(`[CHATWOOT] Final duplicate check found existing message, skipping creation`);
+            return finalDuplicateCheck;
+          }
+
           const send = await this.createMessage(
             instance,
             getConversation,
@@ -2255,7 +2334,7 @@ export class ChatwootService {
             false,
             [],
             body,
-            'WAID:' + body.key.id,
+            sourceId,
             quotedMsg,
           );
 
@@ -2313,9 +2392,34 @@ export class ChatwootService {
           return;
         }
 
-        const editedText = `${
-          body?.editedMessage?.conversation || body?.editedMessage?.extendedTextMessage?.text
-        }\n\n_\`${i18next.t('cw.message.edited')}.\`_`;
+        // Extract the new edited content
+        const newContent = body?.editedMessage?.conversation || body?.editedMessage?.extendedTextMessage?.text;
+
+        if (!newContent) {
+          this.logger.warn('No edited content found in message edit event');
+          return;
+        }
+
+        // Try to update the existing message instead of creating a new one
+        const sourceId = 'WAID:' + body.key.id;
+        try {
+          const existingMessage = await this.checkExistingMessage(sourceId);
+          if (existingMessage) {
+            // Update the existing message content
+            const updatedMessage = await this.updateMessage(existingMessage.id, {
+              content: newContent
+            });
+            if (updatedMessage) {
+              this.logger.info(`[CHATWOOT] Updated message ${existingMessage.id} content due to edit`);
+              return updatedMessage;
+            }
+          }
+        } catch (error) {
+          this.logger.error(`[CHATWOOT] Error updating edited message: ${error.message}`);
+        }
+
+        // Fallback: create a new message with edit indicator (old behavior)
+        const editedText = `${newContent}\n\n_\`${i18next.t('cw.message.edited')}.\`_`;
         const message = await this.getMessageByKeyId(instance, body.key.id);
         const key = message.key as {
           id: string;
@@ -2337,13 +2441,14 @@ export class ChatwootService {
             {
               message: { extendedTextMessage: { contextInfo: { stanzaId: key.id } } },
             },
-            'WAID:' + body.key.id,
+            sourceId + '_edited',
             null,
           );
           if (!send) {
             this.logger.warn('edited message not sent');
             return;
           }
+          return send;
         }
         return;
       }
@@ -2452,6 +2557,13 @@ export class ChatwootService {
       }
     } catch (error) {
       this.logger.error(error);
+    } finally {
+      // Always clean up the Redis lock
+      if (body?.key?.id) {
+        const messageId = body.key.id;
+        const redisKey = `chatwoot_message_processing:${messageId}`;
+        await this.cache.delete(redisKey);
+      }
     }
   }
 
