@@ -10,13 +10,13 @@ import { Events } from '@api/types/wa.types';
 import { Chatwoot, ConfigService, Database, HttpServer } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import ChatwootClient, {
-  ChatwootAPIConfig,
-  contact,
-  contact_inboxes,
-  conversation,
-  conversation_show,
-  generic_id,
-  inbox,
+    ChatwootAPIConfig,
+    contact,
+    contact_inboxes,
+    conversation,
+    conversation_show,
+    generic_id,
+    inbox,
 } from '@figuro/chatwoot-sdk';
 import { request as chatwootRequest } from '@figuro/chatwoot-sdk/dist/core/request';
 import { Chatwoot as ChatwootModel, Contact as ContactModel, Message as MessageModel } from '@prisma/client';
@@ -132,12 +132,12 @@ export class ChatwootService {
       // Use HTTP request to check if message exists in Ruut backend
       const response = await axios.get(`${this.provider.url}/api/v1/messages/check_duplicate`, {
         headers: {
-          'api_access_token': this.provider.token,
+          api_access_token: this.provider.token,
           'Content-Type': 'application/json',
         },
         params: {
-          source_id: sourceId
-        }
+          source_id: sourceId,
+        },
       });
 
       return response.data?.exists ? response.data.message : null;
@@ -150,17 +150,13 @@ export class ChatwootService {
 
   private async updateMessage(messageId: number, updateData: { content: string }): Promise<any> {
     try {
-      const response = await axios.patch(
-        `${this.provider.url}/api/v1/messages/${messageId}`,
-        updateData,
-        {
-          headers: {
-            'api_access_token': this.provider.token,
-            'Content-Type': 'application/json',
-          },
-          timeout: 5000,
-        }
-      );
+      const response = await axios.patch(`${this.provider.url}/api/v1/messages/${messageId}`, updateData, {
+        headers: {
+          api_access_token: this.provider.token,
+          'Content-Type': 'application/json',
+        },
+        timeout: 5000,
+      });
 
       return response.data;
     } catch (error) {
@@ -440,21 +436,21 @@ export class ChatwootService {
       let tagId = tagData?.id;
       const taggingsCount = tagData?.taggings_count || 0;
 
-      const sqlTag = `INSERT INTO tags (name, taggings_count) 
-                      VALUES ($1, $2) 
-                      ON CONFLICT (name) 
-                      DO UPDATE SET taggings_count = tags.taggings_count + 1 
+      const sqlTag = `INSERT INTO tags (name, taggings_count)
+                      VALUES ($1, $2)
+                      ON CONFLICT (name)
+                      DO UPDATE SET taggings_count = tags.taggings_count + 1
                       RETURNING id`;
 
       tagId = (await this.pgClient.query(sqlTag, [nameInbox, taggingsCount + 1]))?.rows[0]?.id;
 
-      const sqlCheckTagging = `SELECT 1 FROM taggings 
+      const sqlCheckTagging = `SELECT 1 FROM taggings
                                WHERE tag_id = $1 AND taggable_type = 'Contact' AND taggable_id = $2 AND context = 'labels' LIMIT 1`;
 
       const taggingExists = (await this.pgClient.query(sqlCheckTagging, [tagId, contactId]))?.rowCount > 0;
 
       if (!taggingExists) {
-        const sqlInsertLabel = `INSERT INTO taggings (tag_id, taggable_type, taggable_id, context, created_at) 
+        const sqlInsertLabel = `INSERT INTO taggings (tag_id, taggable_type, taggable_id, context, created_at)
                                 VALUES ($1, 'Contact', $2, 'labels', NOW())`;
 
         await this.pgClient.query(sqlInsertLabel, [tagId, contactId]);
@@ -943,6 +939,7 @@ export class ChatwootService {
         attachments: attachments,
         private: privateMessage || false,
         source_id: sourceId,
+        external_created_at: messageBody?.messageTimestamp,
         content_attributes: {
           ...replyToIds,
         },
@@ -1065,6 +1062,10 @@ export class ChatwootService {
     }
 
     data.append('message_type', messageType);
+
+    if (messageBody?.messageTimestamp) {
+      data.append('external_created_at', messageBody.messageTimestamp.toString());
+    }
 
     data.append('attachments[]', fileStream, { filename: fileName });
 
@@ -2407,7 +2408,7 @@ export class ChatwootService {
           if (existingMessage) {
             // Update the existing message content
             const updatedMessage = await this.updateMessage(existingMessage.id, {
-              content: newContent
+              content: newContent,
             });
             if (updatedMessage) {
               this.logger.info(`[CHATWOOT] Updated message ${existingMessage.id} content due to edit`);
@@ -2490,6 +2491,24 @@ export class ChatwootService {
           }
         }
         return;
+
+        if (event === 'messages.agent_read') {
+          if (!body?.key?.id) {
+            this.logger.warn('message id not found');
+            return;
+          }
+          const message = await this.getMessageByKeyId(instance, body.key.id);
+          const conversationId = message?.chatwootConversationId;
+          if (conversationId) {
+            const client = await this.clientCw(instance);
+            if (!client) return;
+            await chatwootRequest(this.getClientCwConfig(), {
+              method: 'POST',
+              url: `/api/v1/accounts/${this.provider.accountId}/conversations/${conversationId}/read`,
+            });
+          }
+          return;
+        }
       }
 
       if (event === 'status.instance') {
