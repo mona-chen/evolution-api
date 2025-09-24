@@ -1,56 +1,56 @@
 import { getCollectionsDto } from '@api/dto/business.dto';
 import { OfferCallDto } from '@api/dto/call.dto';
 import {
-    ArchiveChatDto,
-    BlockUserDto,
-    DeleteMessage,
-    getBase64FromMediaMessageDto,
-    LastMessage,
-    MarkChatUnreadDto,
-    NumberBusiness,
-    OnWhatsAppDto,
-    PrivacySettingDto,
-    ReadMessageDto,
-    SendPresenceDto,
-    UpdateMessageDto,
-    WhatsAppNumberDto,
+  ArchiveChatDto,
+  BlockUserDto,
+  DeleteMessage,
+  getBase64FromMediaMessageDto,
+  LastMessage,
+  MarkChatUnreadDto,
+  NumberBusiness,
+  OnWhatsAppDto,
+  PrivacySettingDto,
+  ReadMessageDto,
+  SendPresenceDto,
+  UpdateMessageDto,
+  WhatsAppNumberDto,
 } from '@api/dto/chat.dto';
 import {
-    AcceptGroupInvite,
-    CreateGroupDto,
-    GetParticipant,
-    GroupDescriptionDto,
-    GroupInvite,
-    GroupJid,
-    GroupPictureDto,
-    GroupSendInvite,
-    GroupSubjectDto,
-    GroupToggleEphemeralDto,
-    GroupUpdateParticipantDto,
-    GroupUpdateSettingDto,
+  AcceptGroupInvite,
+  CreateGroupDto,
+  GetParticipant,
+  GroupDescriptionDto,
+  GroupInvite,
+  GroupJid,
+  GroupPictureDto,
+  GroupSendInvite,
+  GroupSubjectDto,
+  GroupToggleEphemeralDto,
+  GroupUpdateParticipantDto,
+  GroupUpdateSettingDto,
 } from '@api/dto/group.dto';
 import { InstanceDto, SetPresenceDto } from '@api/dto/instance.dto';
 import { HandleLabelDto, LabelDto } from '@api/dto/label.dto';
 import {
-    Button,
-    ContactMessage,
-    KeyType,
-    MediaMessage,
-    Options,
-    SendAudioDto,
-    SendButtonsDto,
-    SendContactDto,
-    SendListDto,
-    SendLocationDto,
-    SendMediaDto,
-    SendPollDto,
-    SendPtvDto,
-    SendReactionDto,
-    SendStatusDto,
-    SendStickerDto,
-    SendTextDto,
-    StatusMessage,
-    TypeButton,
+  Button,
+  ContactMessage,
+  KeyType,
+  MediaMessage,
+  Options,
+  SendAudioDto,
+  SendButtonsDto,
+  SendContactDto,
+  SendListDto,
+  SendLocationDto,
+  SendMediaDto,
+  SendPollDto,
+  SendPtvDto,
+  SendReactionDto,
+  SendStatusDto,
+  SendStickerDto,
+  SendTextDto,
+  StatusMessage,
+  TypeButton,
 } from '@api/dto/sendMessage.dto';
 import { chatwootImport } from '@api/integrations/chatbot/chatwoot/utils/chatwoot-import-helper';
 import * as s3Service from '@api/integrations/storage/s3/libs/minio.server';
@@ -90,43 +90,42 @@ import { AuthStateProvider } from '@utils/use-multi-file-auth-state-provider-fil
 import { useMultiFileAuthStateRedisDb } from '@utils/use-multi-file-auth-state-redis-db';
 import axios from 'axios';
 import makeWASocket, {
-    AnyMessageContent,
-    BufferedEventData,
-    BufferJSON,
-    CacheStore,
-    CatalogCollection,
-    Chat,
-    ConnectionState,
-    Contact,
-    delay,
-    DisconnectReason,
-    downloadContentFromMessage,
-    downloadMediaMessage,
-    generateWAMessageFromContent,
-    getAggregateVotesInPollMessage,
-    GetCatalogOptions,
-    getContentType,
-    getDevice,
-    GroupMetadata,
-    isJidBroadcast,
-    isJidGroup,
-    isJidNewsletter,
-    isPnUser,
-    makeCacheableSignalKeyStore,
-    MessageUpsertType,
-    MessageUserReceiptUpdate,
-    MiscMessageGenerationOptions,
-    ParticipantAction,
-    prepareWAMessageMedia,
-    Product,
-    proto,
-    UserFacingSocketConfig,
-    WABrowserDescription,
-    WAMediaUpload,
-    WAMessage,
-    WAMessageKey,
-    WAPresence,
-    WASocket,
+  AnyMessageContent,
+  BufferedEventData,
+  BufferJSON,
+  CacheStore,
+  CatalogCollection,
+  Chat,
+  ConnectionState,
+  Contact,
+  delay,
+  DisconnectReason,
+  downloadContentFromMessage,
+  downloadMediaMessage,
+  generateWAMessageFromContent,
+  getAggregateVotesInPollMessage,
+  GetCatalogOptions,
+  getContentType,
+  getDevice,
+  GroupMetadata,
+  isJidBroadcast,
+  isJidGroup,
+  isJidNewsletter,
+  makeCacheableSignalKeyStore,
+  MessageUpsertType,
+  MessageUserReceiptUpdate,
+  MiscMessageGenerationOptions,
+  ParticipantAction,
+  prepareWAMessageMedia,
+  Product,
+  proto,
+  UserFacingSocketConfig,
+  WABrowserDescription,
+  WAMediaUpload,
+  WAMessage,
+  WAMessageKey,
+  WAPresence,
+  WASocket,
 } from 'baileys';
 import { Label } from 'baileys/lib/Types/Label';
 import { LabelAssociation } from 'baileys/lib/Types/LabelAssociation';
@@ -173,12 +172,12 @@ async function getVideoDuration(input: Buffer | string | Readable): Promise<numb
   const mediainfo = await MediaInfoFactory({ format: 'JSON' });
 
   let fileSize: number;
-  let readChunk: (size: number, offset: number) => Promise<Buffer>;
+  let readChunk: (size: number, offset: number) => Promise<Uint8Array>;
 
   if (Buffer.isBuffer(input)) {
     fileSize = input.length;
-    readChunk = async (size: number, offset: number): Promise<Buffer> => {
-      return input.slice(offset, offset + size);
+    readChunk = async (size: number, offset: number): Promise<Uint8Array> => {
+      return new Uint8Array(input.slice(offset, offset + size));
     };
   } else if (typeof input === 'string') {
     const fs = await import('fs');
@@ -186,8 +185,8 @@ async function getVideoDuration(input: Buffer | string | Readable): Promise<numb
     fileSize = stat.size;
     const fd = await fs.promises.open(input, 'r');
 
-    readChunk = async (size: number, offset: number): Promise<Buffer> => {
-      const buffer = Buffer.alloc(size);
+    readChunk = async (size: number, offset: number): Promise<Uint8Array> => {
+      const buffer = new Uint8Array(size);
       await fd.read(buffer, 0, size, offset);
       return buffer;
     };
@@ -208,11 +207,11 @@ async function getVideoDuration(input: Buffer | string | Readable): Promise<numb
     for await (const chunk of input) {
       chunks.push(chunk);
     }
-    const data = Buffer.concat(chunks);
+    const data = (Buffer.concat as any)(chunks);
     fileSize = data.length;
 
-    readChunk = async (size: number, offset: number): Promise<Buffer> => {
-      return data.slice(offset, offset + size);
+    readChunk = async (size: number, offset: number): Promise<Uint8Array> => {
+      return new Uint8Array(data.slice(offset, offset + size));
     };
   } else {
     throw new Error('Tipo de entrada não suportado');
@@ -1013,8 +1012,8 @@ export class BaileysStartupService extends ChannelStartupService {
             continue;
           }
 
-          if (m.key.remoteJid?.includes('@lid') && ((m.key as any) as ExtendedIMessageKey).senderPn) {
-            m.key.remoteJid = ((m.key as any) as ExtendedIMessageKey).senderPn;
+          if (m.key.remoteJid?.includes('@lid') && (m.key as any as ExtendedIMessageKey).senderPn) {
+            m.key.remoteJid = (m.key as any as ExtendedIMessageKey).senderPn;
           }
 
           if (Long.isLong(m?.messageTimestamp)) {
@@ -1079,7 +1078,6 @@ export class BaileysStartupService extends ChannelStartupService {
     ) => {
       try {
         for (const received of messages) {
-
           if (received.key.remoteJid?.includes('@lid') && (received.key as ExtendedMessageKey).senderPn) {
             (received.key as ExtendedMessageKey).previousRemoteJid = received.key.remoteJid;
             received.key.remoteJid = (received.key as ExtendedMessageKey).senderPn;
@@ -1447,8 +1445,8 @@ export class BaileysStartupService extends ChannelStartupService {
           continue;
         }
 
-        if (key.remoteJid?.includes('@lid') && key.remoteJidAlt) {
-          key.remoteJid = key.remoteJidAlt;
+        if (key.remoteJid?.includes('@lid') && (key as any).remoteJidAlt) {
+          key.remoteJid = (key as any).remoteJidAlt;
         }
 
         const updateKey = `${this.instance.id}_${key.id}_${update.status}`;
@@ -1548,7 +1546,7 @@ export class BaileysStartupService extends ChannelStartupService {
                       this.chatwootService.eventWhatsapp(
                         'messages.agent_read',
                         { instanceName: this.instance.name, instanceId: this.instanceId },
-                        { key }
+                        { key },
                       );
                     } catch (e) {
                       this.logger.warn(`Failed to notify Chatwoot agent_read: ${e}`);
@@ -1966,7 +1964,7 @@ export class BaileysStartupService extends ChannelStartupService {
         quoted,
       });
       const id = await this.client.relayMessage(sender, message, { messageId });
-      m.key = { id: id, remoteJid: sender, participant: isPnUser(sender) ? sender : undefined, fromMe: true };
+      m.key = { id: id, remoteJid: sender, participant: isJidNewsletter(sender) ? sender : undefined, fromMe: true };
       for (const [key, value] of Object.entries(m)) {
         if (!value || (isArray(value) && value.length) === 0) {
           delete m[key];
@@ -2707,10 +2705,10 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
-  private isAnimatedWebp(buffer: Buffer): boolean {
+  private isAnimatedWebp(buffer: Uint8Array): boolean {
     if (buffer.length < 12) return false;
 
-    return buffer.indexOf(Buffer.from('ANIM')) !== -1;
+    return buffer.indexOf(Buffer.from('ANIM')[0]) !== -1;
   }
 
   private isAnimated(image: string, buffer: Buffer): boolean {
@@ -2718,7 +2716,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (lowerCaseImage.includes('.gif')) return true;
 
-    if (lowerCaseImage.includes('.webp')) return this.isAnimatedWebp(buffer);
+    if (lowerCaseImage.includes('.webp')) return this.isAnimatedWebp(new Uint8Array(buffer));
 
     return false;
   }
@@ -2849,7 +2847,7 @@ export class BaileysStartupService extends ChannelStartupService {
       ffmpegProcess.on('close', (code) => {
         if (code === 0) {
           this.logger.verbose('Audio converted to mp4');
-          const outputBuffer = Buffer.concat(outputChunks);
+          const outputBuffer = (Buffer.concat as any)(outputChunks);
           resolve(outputBuffer);
         } else {
           this.logger.error(`ffmpeg exited with code ${code}`);
@@ -2917,7 +2915,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
         outputAudioStream.on('data', (chunk) => chunks.push(chunk));
         outputAudioStream.on('end', () => {
-          const outputBuffer = Buffer.concat(chunks);
+          const outputBuffer = (Buffer.concat as any)(chunks);
           resolve(outputBuffer);
         });
 
@@ -3443,7 +3441,7 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       const keys: proto.IMessageKey[] = [];
       data.readMessages.forEach((read) => {
-        if (isJidGroup(read.remoteJid) || isPnUser(read.remoteJid)) {
+        if (isJidGroup(read.remoteJid) || isJidNewsletter(read.remoteJid)) {
           keys.push({ remoteJid: read.remoteJid, fromMe: read.fromMe, id: read.id });
         }
       });
@@ -4634,7 +4632,11 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       const ciphertextBuffer = Buffer.from(ciphertext, 'base64');
 
-      const response = await this.client.signalRepository.decryptMessage({ jid, type, ciphertext: ciphertextBuffer });
+      const response = await this.client.signalRepository.decryptMessage({
+        jid,
+        type,
+        ciphertext: new Uint8Array(ciphertextBuffer),
+      });
 
       return response instanceof Uint8Array ? Buffer.from(response).toString('base64') : response;
     } catch (error) {

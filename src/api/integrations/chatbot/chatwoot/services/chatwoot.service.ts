@@ -11,13 +11,13 @@ import { Events } from '@api/types/wa.types';
 import { Chatwoot, ConfigService, Database, HttpServer } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import ChatwootClient, {
-    ChatwootAPIConfig,
-    contact,
-    contact_inboxes,
-    conversation,
-    conversation_show,
-    generic_id,
-    inbox,
+  ChatwootAPIConfig,
+  contact,
+  contact_inboxes,
+  conversation,
+  conversation_show,
+  generic_id,
+  inbox,
 } from '@figuro/chatwoot-sdk';
 import { request as chatwootRequest } from '@figuro/chatwoot-sdk/dist/core/request';
 import { Chatwoot as ChatwootModel, Contact as ContactModel, Message as MessageModel } from '@prisma/client';
@@ -938,7 +938,7 @@ export class ChatwootService {
           ...replyToIds,
         },
         source_reply_id: sourceReplyId ? sourceReplyId.toString() : null,
-      },
+      } as any, // temporarily cast to any to allow sending of external_created_at,
     });
 
     if (!message) {
@@ -2357,7 +2357,7 @@ export class ChatwootService {
 
         const messageType = key?.fromMe ? 'outgoing' : 'incoming';
 
-         // Extract the new edited content
+        // Extract the new edited content
         const newContent = body?.editedMessage?.conversation || body?.editedMessage?.extendedTextMessage?.text;
 
         if (!newContent) {
@@ -2382,7 +2382,6 @@ export class ChatwootService {
         } catch (error) {
           this.logger.error(`[CHATWOOT] Error updating edited message: ${error.message}`);
         }
-
 
         if (message && message.chatwootConversationId) {
           const send = await this.createMessage(
@@ -2444,7 +2443,6 @@ export class ChatwootService {
           }
         }
         return;
-
       }
 
       if (event === 'status.instance') {

@@ -135,7 +135,7 @@ export const useVoiceCallsBaileys = async (
       const response = await baileys_sock.signalRepository.decryptMessage({
         jid: jid,
         type: type,
-        ciphertext: ciphertext,
+        ciphertext: new Uint8Array(ciphertext),
       });
 
       callback(response);
