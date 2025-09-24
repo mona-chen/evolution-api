@@ -50,7 +50,6 @@ export class InstanceController {
         throw new BadRequestException('Invalid integration');
       }
 
-
       const instanceId = v4();
       let chatwoot_channel;
 

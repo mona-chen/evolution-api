@@ -684,20 +684,20 @@ export class ChannelStartupService {
   public async fetchStatusMessage(query: any) {
     // First find all message updates that match the criteria
     const updates = await this.prismaRepository.messageUpdate.findMany({
-        where: {
-            instanceId: this.instanceId,
-            ...(query.where?.id && { keyId: query.where.id }),
-            ...(query.where?.fromMe !== undefined && { fromMe: query.where.fromMe }),
-            ...(query.where?.remoteJid && { remoteJid: query.where.remoteJid })
-        },
-        orderBy: {
-            id: 'desc'
-        },
-        skip: query.offset * (query?.page === 1 ? 0 : (query?.page as number) - 1),
-        take: query.offset,
-        include: {
-            Message: true
-        }
+      where: {
+        instanceId: this.instanceId,
+        ...(query.where?.id && { keyId: query.where.id }),
+        ...(query.where?.fromMe !== undefined && { fromMe: query.where.fromMe }),
+        ...(query.where?.remoteJid && { remoteJid: query.where.remoteJid }),
+      },
+      orderBy: {
+        id: 'desc',
+      },
+      skip: query.offset * (query?.page === 1 ? 0 : (query?.page as number) - 1),
+      take: query.offset,
+      include: {
+        Message: true,
+      },
     });
 
     return updates;
