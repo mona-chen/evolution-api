@@ -444,4 +444,40 @@ export class InstanceController {
       throw new BadRequestException(error.toString());
     }
   }
+
+  public async clearSessionKeys({ instanceName }: InstanceDto) {
+    const { instance } = await this.connectionState({ instanceName });
+
+    if (!instance.state) {
+      throw new BadRequestException('The "' + instanceName + '" instance does not exist');
+    }
+
+    try {
+      await this.waMonitor.waInstances[instanceName]?.clearSessionKeys();
+
+      return {
+        status: 'SUCCESS',
+        error: false,
+        response: { message: 'Session keys cleared and reconnection initiated' },
+      };
+    } catch (error) {
+      throw new InternalServerErrorException(error.toString());
+    }
+  }
+
+  public async getDecryptionErrorStatus({ instanceName }: InstanceDto) {
+    const { instance } = await this.connectionState({ instanceName });
+
+    if (!instance.state) {
+      throw new BadRequestException('The "' + instanceName + '" instance does not exist');
+    }
+
+    try {
+      const status = this.waMonitor.waInstances[instanceName]?.getDecryptionErrorStatus();
+
+      return { status: 'SUCCESS', error: false, response: status };
+    } catch (error) {
+      throw new InternalServerErrorException(error.toString());
+    }
+  }
 }

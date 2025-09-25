@@ -75,6 +75,7 @@ import {
   QrCode,
   S3,
 } from '@config/env.config';
+import { INSTANCE_DIR } from '@config/path.config';
 import { BadRequestException, InternalServerErrorException, NotFoundException } from '@exceptions';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { Boom } from '@hapi/boom';
@@ -135,12 +136,14 @@ import { randomBytes } from 'crypto';
 import EventEmitter2 from 'eventemitter2';
 import ffmpeg from 'fluent-ffmpeg';
 import FormData from 'form-data';
+import { promises as fs } from 'fs';
 import Long from 'long';
 import mimeTypes from 'mime-types';
 import NodeCache from 'node-cache';
 import cron from 'node-cron';
 import { release } from 'os';
 import { join } from 'path';
+import * as path from 'path';
 import P from 'pino';
 import qrcode, { QRCodeToDataURLOptions } from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
@@ -165,6 +168,15 @@ export interface ExtendedIMessageKey extends proto.IMessageKey {
 }
 
 const groupMetadataCache = new CacheService(new CacheEngine(configService, 'groups').getEngine());
+
+// Error tracking for automatic session recovery
+interface DecryptionErrorTracker {
+  count: number;
+  lastErrorTime: number;
+  lastRecoveryTime: number;
+}
+
+const decryptionErrorTrackers = new Map<string, DecryptionErrorTracker>();
 
 // Adicione a função getVideoDuration no início do arquivo
 async function getVideoDuration(input: Buffer | string | Readable): Promise<number> {
@@ -283,6 +295,90 @@ export class BaileysStartupService extends ChannelStartupService {
     const sessionExists = await this.prismaRepository.session.findFirst({ where: { sessionId: this.instanceId } });
     if (sessionExists) {
       await this.prismaRepository.session.delete({ where: { sessionId: this.instanceId } });
+    }
+  }
+
+  private async trackDecryptionError() {
+    const now = Date.now();
+    const instanceId = this.instanceId;
+
+    let tracker = decryptionErrorTrackers.get(instanceId);
+    if (!tracker) {
+      tracker = { count: 0, lastErrorTime: 0, lastRecoveryTime: 0 };
+      decryptionErrorTrackers.set(instanceId, tracker);
+    }
+
+    tracker.count++;
+    tracker.lastErrorTime = now;
+
+    // Check if we should trigger automatic recovery
+    const ERROR_THRESHOLD = 10; // 10 errors
+    const TIME_WINDOW = 5 * 60 * 1000; // 5 minutes
+    const COOLDOWN_PERIOD = 30 * 60 * 1000; // 30 minutes cooldown
+
+    const timeSinceLastRecovery = now - tracker.lastRecoveryTime;
+    const errorsInWindow = tracker.count;
+
+    if (errorsInWindow >= ERROR_THRESHOLD && timeSinceLastRecovery > COOLDOWN_PERIOD) {
+      this.logger.warn(
+        `High decryption error rate detected (${errorsInWindow} errors in ${TIME_WINDOW / 60000}min). Triggering automatic session recovery.`,
+      );
+
+      // Reset counter
+      tracker.count = 0;
+      tracker.lastRecoveryTime = now;
+
+      // Trigger automatic recovery
+      try {
+        await this.clearSessionKeys();
+        this.logger.info('Automatic session recovery completed successfully');
+      } catch (error) {
+        this.logger.error('Automatic session recovery failed: ' + error.message);
+      }
+    }
+  }
+
+  public async clearSessionKeys() {
+    this.logger.info('Clearing corrupted session keys for instance: ' + this.instanceName);
+
+    try {
+      // Clean up message processor
+      this.messageProcessor.onDestroy();
+
+      // Close current client connection
+      this.client?.ws?.close();
+      this.client?.end(new Error('Clearing session keys'));
+
+      // Clear session keys based on storage configuration
+      const cache = this.configService.get<CacheConf>('CACHE');
+
+      if (cache?.REDIS.ENABLED && cache?.REDIS.SAVE_INSTANCES) {
+        // Clear Redis session keys
+        this.logger.info('Clearing Redis session keys');
+        await this.baileysCache.deleteAll();
+      } else {
+        // Clear file-based session keys
+        this.logger.info('Clearing file-based session keys');
+        const localFolder = path.join(INSTANCE_DIR, this.instanceId);
+        try {
+          await fs.rm(localFolder, { recursive: true, force: true });
+          this.logger.info('File-based session keys cleared');
+        } catch (error) {
+          this.logger.warn('Error clearing file-based session keys: ' + error.message);
+        }
+      }
+
+      // Keep the main credentials (creds) in database but clear corrupted keys
+      // The creds will be regenerated on next connection
+      this.logger.info('Session keys cleared, credentials preserved');
+
+      // Force reconnection with fresh session keys
+      await this.connectToWhatsapp();
+
+      this.logger.info('Session keys cleared and reconnection initiated');
+    } catch (error) {
+      this.logger.error('Error clearing session keys: ' + error.message);
+      throw new InternalServerErrorException('Failed to clear session keys', error.toString());
     }
   }
 
@@ -1096,6 +1192,10 @@ export class BaileysStartupService extends ChannelStartupService {
             )
           ) {
             this.logger.warn(`Message ignored with messageStubParameters: ${JSON.stringify(received, null, 2)}`);
+
+            // Track decryption errors for automatic recovery
+            await this.trackDecryptionError();
+
             continue;
           }
           if (received.message?.conversation || received.message?.extendedTextMessage?.text) {
@@ -4650,6 +4750,30 @@ export class BaileysStartupService extends ChannelStartupService {
     const response = { me: this.client.authState.creds.me, account: this.client.authState.creds.account };
 
     return response;
+  }
+
+  public getDecryptionErrorStatus() {
+    const tracker = decryptionErrorTrackers.get(this.instanceId);
+    if (!tracker) {
+      return {
+        errorCount: 0,
+        lastErrorTime: null,
+        lastRecoveryTime: null,
+        nextRecoveryThreshold: 10,
+        cooldownRemaining: 0,
+      };
+    }
+
+    const now = Date.now();
+    const cooldownRemaining = Math.max(0, 30 * 60 * 1000 - (now - tracker.lastRecoveryTime));
+
+    return {
+      errorCount: tracker.count,
+      lastErrorTime: tracker.lastErrorTime ? new Date(tracker.lastErrorTime).toISOString() : null,
+      lastRecoveryTime: tracker.lastRecoveryTime ? new Date(tracker.lastRecoveryTime).toISOString() : null,
+      nextRecoveryThreshold: 10,
+      cooldownRemaining: Math.ceil(cooldownRemaining / 1000 / 60), // minutes
+    };
   }
 
   //Business Controller

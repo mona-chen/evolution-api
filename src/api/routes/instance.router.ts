@@ -95,6 +95,26 @@ export class InstanceRouter extends RouterBroker {
         });
 
         return res.status(HttpStatus.OK).json(response);
+      })
+      .post(this.routerPath('clearSessionKeys'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<InstanceDto>({
+          request: req,
+          schema: null,
+          ClassRef: InstanceDto,
+          execute: (instance) => instanceController.clearSessionKeys(instance),
+        });
+
+        return res.status(HttpStatus.OK).json(response);
+      })
+      .get(this.routerPath('decryptionErrorStatus'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<InstanceDto>({
+          request: req,
+          schema: null,
+          ClassRef: InstanceDto,
+          execute: (instance) => instanceController.getDecryptionErrorStatus(instance),
+        });
+
+        return res.status(HttpStatus.OK).json(response);
       });
   }
 
