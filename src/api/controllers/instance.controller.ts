@@ -480,4 +480,36 @@ export class InstanceController {
       throw new InternalServerErrorException(error.toString());
     }
   }
+
+  public async manualSessionRecovery({ instanceName }: InstanceDto) {
+    const { instance } = await this.connectionState({ instanceName });
+
+    if (!instance.state) {
+      throw new BadRequestException('The "' + instanceName + '" instance does not exist');
+    }
+
+    try {
+      const result = await this.waMonitor.waInstances[instanceName]?.manualSessionRecovery();
+
+      return { status: 'SUCCESS', error: false, response: result };
+    } catch (error) {
+      throw new InternalServerErrorException(error.toString());
+    }
+  }
+
+  public async getStreamConflictStatus({ instanceName }: InstanceDto) {
+    const { instance } = await this.connectionState({ instanceName });
+
+    if (!instance.state) {
+      throw new BadRequestException('The "' + instanceName + '" instance does not exist');
+    }
+
+    try {
+      const status = this.waMonitor.waInstances[instanceName]?.getStreamConflictStatus();
+
+      return { status: 'SUCCESS', error: false, response: status };
+    } catch (error) {
+      throw new InternalServerErrorException(error.toString());
+    }
+  }
 }

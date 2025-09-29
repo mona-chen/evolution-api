@@ -176,7 +176,13 @@ interface DecryptionErrorTracker {
   lastRecoveryTime: number;
 }
 
+interface StreamConflictTracker {
+  lastConflictTime: number;
+  conflictCount: number;
+}
+
 const decryptionErrorTrackers = new Map<string, DecryptionErrorTracker>();
+const streamConflictTrackers = new Map<string, StreamConflictTracker>();
 
 // Adicione a função getVideoDuration no início do arquivo
 async function getVideoDuration(input: Buffer | string | Readable): Promise<number> {
@@ -335,6 +341,92 @@ export class BaileysStartupService extends ChannelStartupService {
       } catch (error) {
         this.logger.error('Automatic session recovery failed: ' + error.message);
       }
+    }
+  }
+
+  private async trackStreamConflict() {
+    const now = Date.now();
+    const instanceId = this.instanceId;
+
+    let tracker = streamConflictTrackers.get(instanceId);
+    if (!tracker) {
+      tracker = { lastConflictTime: 0, conflictCount: 0 };
+      streamConflictTrackers.set(instanceId, tracker);
+    }
+
+    tracker.conflictCount++;
+    tracker.lastConflictTime = now;
+
+    // Check if we should trigger automatic recovery for stream conflicts
+    const CONFLICT_THRESHOLD = 3; // 3 conflicts
+    const TIME_WINDOW = 10 * 60 * 1000; // 10 minutes
+    const COOLDOWN_PERIOD = 15 * 60 * 1000; // 15 minutes cooldown
+
+    const decryptionTracker = decryptionErrorTrackers.get(instanceId);
+    const timeSinceLastRecovery = decryptionTracker
+      ? now - decryptionTracker.lastRecoveryTime
+      : COOLDOWN_PERIOD + 1;
+
+    if (tracker.conflictCount >= CONFLICT_THRESHOLD && timeSinceLastRecovery > COOLDOWN_PERIOD) {
+      this.logger.warn(
+        `High stream conflict rate detected (${tracker.conflictCount} conflicts in ${TIME_WINDOW / 60000}min). Triggering automatic session recovery.`,
+      );
+
+      // Reset counter
+      tracker.conflictCount = 0;
+
+      // Update decryption tracker recovery time to prevent overlapping recoveries
+      if (decryptionTracker) {
+        decryptionTracker.lastRecoveryTime = now;
+      }
+
+      // Trigger automatic recovery
+      try {
+        await this.clearSessionKeys();
+        this.logger.info('Automatic session recovery completed successfully due to stream conflicts');
+      } catch (error) {
+        this.logger.error('Automatic session recovery failed: ' + error.message);
+      }
+    }
+  }
+
+  private setupDecryptionErrorMonitoring() {
+    // Monitor Baileys logs for decryption errors and stream conflicts that aren't caught by messageStubParameters
+    const originalLogger = this.client?.logger;
+    if (originalLogger) {
+      const originalError = originalLogger.error.bind(originalLogger);
+      originalLogger.error = (...args: any[]) => {
+        // Check if this is a decryption error
+        const errorMessage = args.join(' ');
+        if (
+          errorMessage.includes('No session found to decrypt message') ||
+          errorMessage.includes('Bad MAC') ||
+          errorMessage.includes('No matching sessions found for message') ||
+          errorMessage.includes('Session error') ||
+          errorMessage.includes('failed to decrypt message')
+        ) {
+          // Track this decryption error
+          this.trackDecryptionError();
+        }
+
+        // Check if this is a stream conflict
+        if (
+          errorMessage.includes('Closing open session in favor of incoming prekey bundle') ||
+          errorMessage.includes('stream conflict') ||
+          errorMessage.includes('Stream conflict') ||
+          errorMessage.includes('stream errored out') ||
+          (errorMessage.includes('conflict') && errorMessage.includes('replaced')) ||
+          (errorMessage.includes('Connection Closed') && errorMessage.includes('processing offline nodes')) ||
+          errorMessage.includes('ETIMEDOUT') ||
+          errorMessage.includes('AggregateError')
+        ) {
+          // Track this stream conflict
+          this.trackStreamConflict();
+        }
+
+        // Call original logger
+        originalError(...args);
+      };
     }
   }
 
@@ -509,6 +601,24 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (connection === 'close') {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      const errorMessage = lastDisconnect?.error?.message || '';
+
+      // Check for stream conflict errors that require session recovery
+      const isStreamConflict = errorMessage.includes('stream errored out') ||
+        (errorMessage.includes('conflict') && errorMessage.includes('replaced')) ||
+        errorMessage.includes('Connection Closed');
+
+      if (isStreamConflict) {
+        this.logger.warn('Stream conflict detected, triggering session recovery');
+        try {
+          await this.clearSessionKeys();
+          this.logger.info('Stream conflict recovery completed');
+        } catch (recoveryError) {
+          this.logger.error('Stream conflict recovery failed: ' + recoveryError.message);
+        }
+        return;
+      }
+
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
       const shouldReconnect = !codesToNotReconnect.includes(statusCode);
       if (shouldReconnect) {
@@ -793,6 +903,9 @@ export class BaileysStartupService extends ChannelStartupService {
     if (this.localSettings.wavoipToken && this.localSettings.wavoipToken.length > 0) {
       useVoiceCallsBaileys(this.localSettings.wavoipToken, this.client, this.connectionStatus.state as any, true);
     }
+
+    // Setup decryption error monitoring
+    this.setupDecryptionErrorMonitoring();
 
     this.eventHandler();
 
@@ -1669,7 +1782,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
           this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
 
-          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE && findMessage)
             await this.prismaRepository.messageUpdate.create({ data: message });
 
           const existingChat = await this.prismaRepository.chat.findFirst({
@@ -1820,6 +1933,28 @@ export class BaileysStartupService extends ChannelStartupService {
 
         if (events['messages.upsert']) {
           const payload = events['messages.upsert'];
+
+          // Check for decryption errors in messages and track them
+          const messagesWithErrors = payload.messages.filter((msg) =>
+            msg?.messageStubParameters?.some?.((param) =>
+              [
+                'No matching sessions found for message',
+                'Bad MAC',
+                'failed to decrypt message',
+                'SessionError',
+                'Invalid PreKey ID',
+                'No session record',
+                'No session found to decrypt message',
+              ].some((err) => param?.includes?.(err)),
+            ),
+          );
+
+          if (messagesWithErrors.length > 0) {
+            // Track decryption errors for automatic recovery
+            for (const msg of messagesWithErrors) {
+              await this.trackDecryptionError();
+            }
+          }
 
           this.messageProcessor.processMessage(payload, settings);
           // this.messageHandle['messages.upsert'](payload, settings);
@@ -4774,6 +4909,51 @@ export class BaileysStartupService extends ChannelStartupService {
       nextRecoveryThreshold: 10,
       cooldownRemaining: Math.ceil(cooldownRemaining / 1000 / 60), // minutes
     };
+  }
+
+  public getStreamConflictStatus() {
+    const tracker = streamConflictTrackers.get(this.instanceId);
+    if (!tracker) {
+      return {
+        conflictCount: 0,
+        lastConflictTime: null,
+        nextRecoveryThreshold: 3,
+      };
+    }
+
+    return {
+      conflictCount: tracker.conflictCount,
+      lastConflictTime: tracker.lastConflictTime ? new Date(tracker.lastConflictTime).toISOString() : null,
+      nextRecoveryThreshold: 3,
+    };
+  }
+
+  public async manualSessionRecovery() {
+    const tracker = decryptionErrorTrackers.get(this.instanceId);
+    const now = Date.now();
+
+    if (tracker && (now - tracker.lastRecoveryTime) < 30 * 60 * 1000) {
+      const cooldownRemaining = Math.ceil((30 * 60 * 1000 - (now - tracker.lastRecoveryTime)) / 1000 / 60);
+      throw new BadRequestException(`Manual recovery is on cooldown. ${cooldownRemaining} minutes remaining.`);
+    }
+
+    this.logger.info('Manual session recovery triggered');
+
+    try {
+      await this.clearSessionKeys();
+      this.logger.info('Manual session recovery completed successfully');
+
+      // Reset tracker
+      if (tracker) {
+        tracker.count = 0;
+        tracker.lastRecoveryTime = now;
+      }
+
+      return { success: true, message: 'Session recovery completed successfully' };
+    } catch (error) {
+      this.logger.error('Manual session recovery failed: ' + error.message);
+      throw new InternalServerErrorException('Failed to perform manual session recovery', error.toString());
+    }
   }
 
   //Business Controller
