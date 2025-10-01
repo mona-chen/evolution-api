@@ -363,9 +363,7 @@ export class BaileysStartupService extends ChannelStartupService {
     const COOLDOWN_PERIOD = 15 * 60 * 1000; // 15 minutes cooldown
 
     const decryptionTracker = decryptionErrorTrackers.get(instanceId);
-    const timeSinceLastRecovery = decryptionTracker
-      ? now - decryptionTracker.lastRecoveryTime
-      : COOLDOWN_PERIOD + 1;
+    const timeSinceLastRecovery = decryptionTracker ? now - decryptionTracker.lastRecoveryTime : COOLDOWN_PERIOD + 1;
 
     if (tracker.conflictCount >= CONFLICT_THRESHOLD && timeSinceLastRecovery > COOLDOWN_PERIOD) {
       this.logger.warn(
@@ -604,7 +602,8 @@ export class BaileysStartupService extends ChannelStartupService {
       const errorMessage = lastDisconnect?.error?.message || '';
 
       // Check for stream conflict errors that require session recovery
-      const isStreamConflict = errorMessage.includes('stream errored out') ||
+      const isStreamConflict =
+        errorMessage.includes('stream errored out') ||
         (errorMessage.includes('conflict') && errorMessage.includes('replaced')) ||
         errorMessage.includes('Connection Closed');
 
@@ -854,7 +853,7 @@ export class BaileysStartupService extends ChannelStartupService {
       markOnlineOnConnect: this.localSettings.alwaysOnline,
       retryRequestDelayMs: 350,
       maxMsgRetryCount: 4,
-      fireInitQueries: true,
+      fireInitQueries: false,
       connectTimeoutMs: 30_000,
       keepAliveIntervalMs: 30_000,
       qrTimeout: 45_000,
@@ -923,7 +922,38 @@ export class BaileysStartupService extends ChannelStartupService {
 
     this.phoneNumber = number;
 
+    // Manually execute init queries with error handling
+    await this.executeInitQueriesSafely();
+
     return this.client;
+  }
+
+  private async executeInitQueriesSafely() {
+    try {
+      this.logger.info('Executing init queries...');
+
+      // Execute init queries one by one with error handling
+      const queries = [
+        { name: 'fetchBlocklist', fn: () => this.client.fetchBlocklist() },
+        { name: 'fetchPrivacySettings', fn: () => this.client.fetchPrivacySettings() },
+      ];
+
+      for (const query of queries) {
+        try {
+          this.logger.debug(`Executing ${query.name}...`);
+          await query.fn();
+          this.logger.debug(`${query.name} completed successfully`);
+        } catch (error) {
+          this.logger.warn(`${query.name} failed: ${error.message}`);
+          // Continue with other queries even if one fails
+        }
+      }
+
+      this.logger.info('Init queries execution completed');
+    } catch (error) {
+      this.logger.error('Error during init queries execution: ' + error.message);
+      // Don't throw error to prevent connection failure
+    }
   }
 
   public async connectToWhatsapp(number?: string): Promise<WASocket> {
@@ -1939,8 +1969,8 @@ export class BaileysStartupService extends ChannelStartupService {
           const payload = events['messages.upsert'];
 
           // Check for decryption errors in messages and track them
-          const messagesWithErrors = payload.messages.filter((msg) =>
-            msg?.messageStubParameters?.some?.((param) =>
+          const messagesWithErrors = payload.messages.filter((message) =>
+            message?.messageStubParameters?.some?.((param) =>
               [
                 'No matching sessions found for message',
                 'Bad MAC',
@@ -1955,7 +1985,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
           if (messagesWithErrors.length > 0) {
             // Track decryption errors for automatic recovery
-            for (const msg of messagesWithErrors) {
+            for (let i = 0; i < messagesWithErrors.length; i++) {
               await this.trackDecryptionError();
             }
           }
@@ -4825,8 +4855,8 @@ export class BaileysStartupService extends ChannelStartupService {
     return response;
   }
 
-  public async baileysAssertSessions(jids: string[], force: boolean) {
-    const response = await this.client.assertSessions(jids, force);
+  public async baileysAssertSessions(jids: string[]) {
+    const response = await this.client.assertSessions(jids);
 
     return response;
   }
@@ -4936,7 +4966,7 @@ export class BaileysStartupService extends ChannelStartupService {
     const tracker = decryptionErrorTrackers.get(this.instanceId);
     const now = Date.now();
 
-    if (tracker && (now - tracker.lastRecoveryTime) < 30 * 60 * 1000) {
+    if (tracker && now - tracker.lastRecoveryTime < 30 * 60 * 1000) {
       const cooldownRemaining = Math.ceil((30 * 60 * 1000 - (now - tracker.lastRecoveryTime)) / 1000 / 60);
       throw new BadRequestException(`Manual recovery is on cooldown. ${cooldownRemaining} minutes remaining.`);
     }
