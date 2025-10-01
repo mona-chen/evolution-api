@@ -663,7 +663,7 @@ export class BaileysStartupService extends ChannelStartupService {
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
         this.instance.profilePictureUrl = profilePic.profilePictureUrl;
-      } catch (error) {
+      } catch {
         this.instance.profilePictureUrl = null;
       }
       const formattedWuid = this.instance.wuid.split('@')[0].padEnd(30, ' ');
@@ -742,7 +742,7 @@ export class BaileysStartupService extends ChannelStartupService {
       }
 
       return webMessageInfo[0].message;
-    } catch (error) {
+    } catch {
       return { conversation: '' };
     }
   }
@@ -815,7 +815,7 @@ export class BaileysStartupService extends ChannelStartupService {
           const rand = Math.floor(Math.random() * Math.floor(proxyUrls.length));
           const proxyUrl = 'http://' + proxyUrls[rand];
           options = { agent: makeProxyAgent(proxyUrl), fetchAgent: makeProxyAgent(proxyUrl) };
-        } catch (error) {
+        } catch {
           this.localProxy.enabled = false;
         }
       } else {
@@ -1414,7 +1414,7 @@ export class BaileysStartupService extends ChannelStartupService {
                   where: { id: existingChat.id },
                   data: { name: received.pushName },
                 });
-              } catch (error) {
+              } catch {
                 console.log(`Chat insert record ignored: ${received.key.remoteJid} - ${this.instanceId}`);
               }
             }
@@ -1581,6 +1581,10 @@ export class BaileysStartupService extends ChannelStartupService {
                 this.logger.error(['Error converting media to base64', error?.message]);
               }
             }
+          }
+
+          if (messageRaw.key.remoteJid?.includes('@lid') && messageRaw.key.remoteJidAlt) {
+            messageRaw.key.remoteJid = messageRaw.key.remoteJidAlt;
           }
 
           this.logger.log(messageRaw);
@@ -1796,7 +1800,7 @@ export class BaileysStartupService extends ChannelStartupService {
             if (this.configService.get<Database>('DATABASE').SAVE_DATA.CHATS) {
               try {
                 await this.prismaRepository.chat.update({ where: { id: existingChat.id }, data: chatToInsert });
-              } catch (error) {
+              } catch {
                 console.log(`Chat insert record ignored: ${chatToInsert.remoteJid} - ${chatToInsert.instanceId}`);
               }
             }
@@ -2086,7 +2090,7 @@ export class BaileysStartupService extends ChannelStartupService {
       const profilePictureUrl = await this.client.profilePictureUrl(jid, 'image');
 
       return { wuid: jid, profilePictureUrl };
-    } catch (error) {
+    } catch {
       return { wuid: jid, profilePictureUrl: null };
     }
   }
@@ -2096,7 +2100,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     try {
       return { wuid: jid, status: (await this.client.fetchStatus(jid))[0]?.status };
-    } catch (error) {
+    } catch {
       return { wuid: jid, status: null };
     }
   }
@@ -2145,7 +2149,7 @@ export class BaileysStartupService extends ChannelStartupService {
           website: business?.website?.shift(),
         };
       }
-    } catch (error) {
+    } catch {
       return { wuid: jid, name: null, picture: null, status: null, os: null, isBusiness: false };
     }
   }
@@ -2385,7 +2389,7 @@ export class BaileysStartupService extends ChannelStartupService {
           if (!cache.REDIS.ENABLED && !cache.LOCAL.ENABLED) group = await this.findGroup({ groupJid: sender }, 'inner');
           else group = await this.getGroupMetadataCache(sender);
           // group = await this.findGroup({ groupJid: sender }, 'inner');
-        } catch (error) {
+        } catch {
           throw new NotFoundException('Group not found');
         }
 
@@ -3900,7 +3904,7 @@ export class BaileysStartupService extends ChannelStartupService {
           {},
           { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
         );
-      } catch (err) {
+      } catch {
         this.logger.error('Download Media failed, trying to retry in 5 seconds...');
         await new Promise((resolve) => setTimeout(resolve, 5000));
         const mediaType = Object.keys(msg.message).find((key) => key.endsWith('Message'));
@@ -4490,7 +4494,7 @@ export class BaileysStartupService extends ChannelStartupService {
   public async inviteInfo(id: GroupInvite) {
     try {
       return await this.client.groupGetInviteInfo(id.inviteCode);
-    } catch (error) {
+    } catch {
       throw new NotFoundException('No invite info', id.inviteCode);
     }
   }
@@ -4513,7 +4517,7 @@ export class BaileysStartupService extends ChannelStartupService {
       }
 
       return { send: true, inviteUrl };
-    } catch (error) {
+    } catch {
       throw new NotFoundException('No send invite');
     }
   }
@@ -5050,7 +5054,7 @@ export class BaileysStartupService extends ChannelStartupService {
         collectionsLength: collections?.length,
         collections: collections,
       };
-    } catch (error) {
+    } catch {
       return { wuid: jid, name: null, isBusiness: false };
     }
   }
