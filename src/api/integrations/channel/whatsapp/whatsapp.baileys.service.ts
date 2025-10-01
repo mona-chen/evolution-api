@@ -416,7 +416,9 @@ export class BaileysStartupService extends ChannelStartupService {
           (errorMessage.includes('conflict') && errorMessage.includes('replaced')) ||
           (errorMessage.includes('Connection Closed') && errorMessage.includes('processing offline nodes')) ||
           errorMessage.includes('ETIMEDOUT') ||
-          errorMessage.includes('AggregateError')
+          errorMessage.includes('AggregateError') ||
+          errorMessage.includes('Pre-key upload timeout') ||
+          errorMessage.includes('Failed to check/upload pre-keys during initialization')
         ) {
           // Track this stream conflict
           this.trackStreamConflict();
@@ -605,7 +607,9 @@ export class BaileysStartupService extends ChannelStartupService {
       const isStreamConflict =
         errorMessage.includes('stream errored out') ||
         (errorMessage.includes('conflict') && errorMessage.includes('replaced')) ||
-        errorMessage.includes('Connection Closed');
+        errorMessage.includes('Connection Closed') ||
+        errorMessage.includes('Pre-key upload timeout') ||
+        errorMessage.includes('Request Time-out');
 
       if (isStreamConflict) {
         this.logger.warn('Stream conflict detected, triggering session recovery');
