@@ -304,6 +304,20 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
+  private isNetworkUnstable(): boolean {
+    // Check if we've had multiple connection issues recently
+    const now = Date.now();
+
+    // Use stream conflict tracker as indicator of network instability
+    const streamTracker = streamConflictTrackers.get(this.instanceId);
+    if (streamTracker) {
+      const recentConflicts = now - streamTracker.lastConflictTime < 10 * 60 * 1000;
+      return streamTracker.conflictCount >= 2 && recentConflicts;
+    }
+
+    return false;
+  }
+
   private async trackDecryptionError() {
     const now = Date.now();
     const instanceId = this.instanceId;
@@ -318,14 +332,22 @@ export class BaileysStartupService extends ChannelStartupService {
     tracker.lastErrorTime = now;
 
     // Check if we should trigger automatic recovery
-    const ERROR_THRESHOLD = 10; // 10 errors
-    const TIME_WINDOW = 5 * 60 * 1000; // 5 minutes
+    const ERROR_THRESHOLD = 25; // Increased from 10 to 25 errors
+    const TIME_WINDOW = 15 * 60 * 1000; // Increased from 5 to 15 minutes
     const COOLDOWN_PERIOD = 30 * 60 * 1000; // 30 minutes cooldown
 
     const timeSinceLastRecovery = now - tracker.lastRecoveryTime;
     const errorsInWindow = tracker.count;
 
     if (errorsInWindow >= ERROR_THRESHOLD && timeSinceLastRecovery > COOLDOWN_PERIOD) {
+      // Skip recovery if network appears unstable
+      if (this.isNetworkUnstable()) {
+        this.logger.warn(
+          `High decryption error rate detected (${errorsInWindow} errors in ${TIME_WINDOW / 60000}min), but network appears unstable. Skipping automatic recovery.`,
+        );
+        return;
+      }
+
       this.logger.warn(
         `High decryption error rate detected (${errorsInWindow} errors in ${TIME_WINDOW / 60000}min). Triggering automatic session recovery.`,
       );
@@ -358,14 +380,22 @@ export class BaileysStartupService extends ChannelStartupService {
     tracker.lastConflictTime = now;
 
     // Check if we should trigger automatic recovery for stream conflicts
-    const CONFLICT_THRESHOLD = 3; // 3 conflicts
-    const TIME_WINDOW = 10 * 60 * 1000; // 10 minutes
+    const CONFLICT_THRESHOLD = 5; // Increased from 3 to 5 conflicts
+    const TIME_WINDOW = 30 * 60 * 1000; // Increased from 10 to 30 minutes
     const COOLDOWN_PERIOD = 15 * 60 * 1000; // 15 minutes cooldown
 
     const decryptionTracker = decryptionErrorTrackers.get(instanceId);
     const timeSinceLastRecovery = decryptionTracker ? now - decryptionTracker.lastRecoveryTime : COOLDOWN_PERIOD + 1;
 
     if (tracker.conflictCount >= CONFLICT_THRESHOLD && timeSinceLastRecovery > COOLDOWN_PERIOD) {
+      // Skip recovery if network appears unstable (too many recent conflicts)
+      if (this.isNetworkUnstable()) {
+        this.logger.warn(
+          `High stream conflict rate detected (${tracker.conflictCount} conflicts in ${TIME_WINDOW / 60000}min), but network appears unstable. Skipping automatic recovery.`,
+        );
+        return;
+      }
+
       this.logger.warn(
         `High stream conflict rate detected (${tracker.conflictCount} conflicts in ${TIME_WINDOW / 60000}min). Triggering automatic session recovery.`,
       );
@@ -604,12 +634,13 @@ export class BaileysStartupService extends ChannelStartupService {
       const errorMessage = lastDisconnect?.error?.message || '';
 
       // Check for stream conflict errors that require session recovery
+      // Made more specific to avoid triggering on generic connection issues
       const isStreamConflict =
         errorMessage.includes('stream errored out') ||
         (errorMessage.includes('conflict') && errorMessage.includes('replaced')) ||
-        errorMessage.includes('Connection Closed') ||
         errorMessage.includes('Pre-key upload timeout') ||
-        errorMessage.includes('Request Time-out');
+        errorMessage.includes('Failed to check/upload pre-keys during initialization') ||
+        (errorMessage.includes('Connection Closed') && errorMessage.includes('processing offline nodes'));
 
       if (isStreamConflict) {
         this.logger.warn('Stream conflict detected, triggering session recovery');
