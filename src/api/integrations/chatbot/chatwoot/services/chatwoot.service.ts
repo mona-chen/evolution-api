@@ -1896,7 +1896,7 @@ export class ChatwootService {
         "chatwootInboxId" = ${chatwootMessageIds.inboxId},
         "chatwootContactInboxSourceId" = ${chatwootMessageIds.contactInboxSourceId},
         "chatwootIsRead" = ${chatwootMessageIds.isRead || false}
-      WHERE "instanceId" = ${instanceId}
+      WHERE "instanceId" = ${instanceId} 
       AND "key"->>'id' = ${key.id}
     `;
 
