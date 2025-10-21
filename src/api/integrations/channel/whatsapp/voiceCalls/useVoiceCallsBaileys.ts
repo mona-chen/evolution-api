@@ -71,7 +71,7 @@ export const useVoiceCallsBaileys = async (
 
   socket.on('assertSessions', async (jids, force, callback) => {
     try {
-      const response = await (baileys_sock as any).assertSessions(jids, force);
+      const response = await baileys_sock.assertSessions(jids);
 
       callback(response);
 
@@ -135,7 +135,7 @@ export const useVoiceCallsBaileys = async (
       const response = await baileys_sock.signalRepository.decryptMessage({
         jid: jid,
         type: type,
-        ciphertext: new Uint8Array(ciphertext),
+        ciphertext: ciphertext,
       });
 
       callback(response);

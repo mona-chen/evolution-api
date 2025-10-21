@@ -75,7 +75,6 @@ import {
   QrCode,
   S3,
 } from '@config/env.config';
-import { INSTANCE_DIR } from '@config/path.config';
 import { BadRequestException, InternalServerErrorException, NotFoundException } from '@exceptions';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { Boom } from '@hapi/boom';
@@ -86,6 +85,7 @@ import { fetchLatestWaWebVersion } from '@utils/fetchLatestWaWebVersion';
 import { makeProxyAgent } from '@utils/makeProxyAgent';
 import { getOnWhatsappCache, saveOnWhatsappCache } from '@utils/onWhatsappCache';
 import { status } from '@utils/renderStatus';
+import { sendTelemetry } from '@utils/sendTelemetry';
 import useMultiFileAuthStatePrisma from '@utils/use-multi-file-auth-state-prisma';
 import { AuthStateProvider } from '@utils/use-multi-file-auth-state-provider-files';
 import { useMultiFileAuthStateRedisDb } from '@utils/use-multi-file-auth-state-redis-db';
@@ -112,6 +112,7 @@ import makeWASocket, {
   isJidBroadcast,
   isJidGroup,
   isJidNewsletter,
+  isPnUser,
   makeCacheableSignalKeyStore,
   MessageUpsertType,
   MessageUserReceiptUpdate,
@@ -136,14 +137,12 @@ import { randomBytes } from 'crypto';
 import EventEmitter2 from 'eventemitter2';
 import ffmpeg from 'fluent-ffmpeg';
 import FormData from 'form-data';
-import { promises as fs } from 'fs';
 import Long from 'long';
 import mimeTypes from 'mime-types';
 import NodeCache from 'node-cache';
 import cron from 'node-cron';
 import { release } from 'os';
 import { join } from 'path';
-import * as path from 'path';
 import P from 'pino';
 import qrcode, { QRCodeToDataURLOptions } from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
@@ -154,13 +153,7 @@ import { v4 } from 'uuid';
 import { BaileysMessageProcessor } from './baileysMessage.processor';
 import { useVoiceCallsBaileys } from './voiceCalls/useVoiceCallsBaileys';
 
-export interface ExtendedMessageKey extends WAMessageKey {
-  senderPn?: string;
-  previousRemoteJid?: string | null;
-}
-
 export interface ExtendedIMessageKey extends proto.IMessageKey {
-  senderPn?: string;
   remoteJidAlt?: string;
   participantAlt?: string;
   server_id?: string;
@@ -169,33 +162,18 @@ export interface ExtendedIMessageKey extends proto.IMessageKey {
 
 const groupMetadataCache = new CacheService(new CacheEngine(configService, 'groups').getEngine());
 
-// Error tracking for automatic session recovery
-interface DecryptionErrorTracker {
-  count: number;
-  lastErrorTime: number;
-  lastRecoveryTime: number;
-}
-
-interface StreamConflictTracker {
-  lastConflictTime: number;
-  conflictCount: number;
-}
-
-const decryptionErrorTrackers = new Map<string, DecryptionErrorTracker>();
-const streamConflictTrackers = new Map<string, StreamConflictTracker>();
-
 // Adicione a função getVideoDuration no início do arquivo
 async function getVideoDuration(input: Buffer | string | Readable): Promise<number> {
   const MediaInfoFactory = (await import('mediainfo.js')).default;
   const mediainfo = await MediaInfoFactory({ format: 'JSON' });
 
   let fileSize: number;
-  let readChunk: (size: number, offset: number) => Promise<Uint8Array>;
+  let readChunk: (size: number, offset: number) => Promise<Buffer>;
 
   if (Buffer.isBuffer(input)) {
     fileSize = input.length;
-    readChunk = async (size: number, offset: number): Promise<Uint8Array> => {
-      return new Uint8Array(input.slice(offset, offset + size));
+    readChunk = async (size: number, offset: number): Promise<Buffer> => {
+      return input.slice(offset, offset + size);
     };
   } else if (typeof input === 'string') {
     const fs = await import('fs');
@@ -203,8 +181,8 @@ async function getVideoDuration(input: Buffer | string | Readable): Promise<numb
     fileSize = stat.size;
     const fd = await fs.promises.open(input, 'r');
 
-    readChunk = async (size: number, offset: number): Promise<Uint8Array> => {
-      const buffer = new Uint8Array(size);
+    readChunk = async (size: number, offset: number): Promise<Buffer> => {
+      const buffer = Buffer.alloc(size);
       await fd.read(buffer, 0, size, offset);
       return buffer;
     };
@@ -225,11 +203,11 @@ async function getVideoDuration(input: Buffer | string | Readable): Promise<numb
     for await (const chunk of input) {
       chunks.push(chunk);
     }
-    const data = (Buffer.concat as any)(chunks);
+    const data = Buffer.concat(chunks);
     fileSize = data.length;
 
-    readChunk = async (size: number, offset: number): Promise<Uint8Array> => {
-      return new Uint8Array(data.slice(offset, offset + size));
+    readChunk = async (size: number, offset: number): Promise<Buffer> => {
+      return data.slice(offset, offset + size);
     };
   } else {
     throw new Error('Tipo de entrada não suportado');
@@ -271,6 +249,10 @@ export class BaileysStartupService extends ChannelStartupService {
   private endSession = false;
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
 
+  // Cache TTL constants (in seconds)
+  private readonly MESSAGE_CACHE_TTL_SECONDS = 5 * 60; // 5 minutes - avoid duplicate message processing
+  private readonly UPDATE_CACHE_TTL_SECONDS = 30 * 60; // 30 minutes - avoid duplicate status updates
+
   public stateConnection: wa.StateConnection = { state: 'close' };
 
   public phoneNumber: string;
@@ -280,227 +262,14 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public async logoutInstance() {
-    // Clean up message processor (upstream improvement)
     this.messageProcessor.onDestroy();
-
-    // Enhanced error handling for logout (local improvement)
-    try {
-      await this.client?.logout('Log out instance: ' + this.instanceName);
-    } catch (err) {
-      // If the error is a 'Connection Closed' error, treat as already disconnected
-      if (err && err.message && err.message.includes('Connection Closed')) {
-        // Emit no.connection event to trigger state clearing and dashboard update
-        this.eventEmitter.emit('no.connection', this.instance.name);
-      } else {
-        throw err;
-      }
-    }
+    await this.client?.logout('Log out instance: ' + this.instanceName);
 
     this.client?.ws?.close();
 
     const sessionExists = await this.prismaRepository.session.findFirst({ where: { sessionId: this.instanceId } });
     if (sessionExists) {
       await this.prismaRepository.session.delete({ where: { sessionId: this.instanceId } });
-    }
-  }
-
-  private isNetworkUnstable(): boolean {
-    // Check if we've had multiple connection issues recently
-    const now = Date.now();
-
-    // Use stream conflict tracker as indicator of network instability
-    const streamTracker = streamConflictTrackers.get(this.instanceId);
-    if (streamTracker) {
-      const recentConflicts = now - streamTracker.lastConflictTime < 10 * 60 * 1000;
-      return streamTracker.conflictCount >= 2 && recentConflicts;
-    }
-
-    return false;
-  }
-
-  private async trackDecryptionError() {
-    const now = Date.now();
-    const instanceId = this.instanceId;
-
-    let tracker = decryptionErrorTrackers.get(instanceId);
-    if (!tracker) {
-      tracker = { count: 0, lastErrorTime: 0, lastRecoveryTime: 0 };
-      decryptionErrorTrackers.set(instanceId, tracker);
-    }
-
-    tracker.count++;
-    tracker.lastErrorTime = now;
-
-    // Check if we should trigger automatic recovery
-    const ERROR_THRESHOLD = 25; // Increased from 10 to 25 errors
-    const TIME_WINDOW = 15 * 60 * 1000; // Increased from 5 to 15 minutes
-    const COOLDOWN_PERIOD = 30 * 60 * 1000; // 30 minutes cooldown
-
-    const timeSinceLastRecovery = now - tracker.lastRecoveryTime;
-    const errorsInWindow = tracker.count;
-
-    if (errorsInWindow >= ERROR_THRESHOLD && timeSinceLastRecovery > COOLDOWN_PERIOD) {
-      // Skip recovery if network appears unstable
-      if (this.isNetworkUnstable()) {
-        this.logger.warn(
-          `High decryption error rate detected (${errorsInWindow} errors in ${TIME_WINDOW / 60000}min), but network appears unstable. Skipping automatic recovery.`,
-        );
-        return;
-      }
-
-      this.logger.warn(
-        `High decryption error rate detected (${errorsInWindow} errors in ${TIME_WINDOW / 60000}min). Triggering automatic session recovery.`,
-      );
-
-      // Reset counter
-      tracker.count = 0;
-      tracker.lastRecoveryTime = now;
-
-      // Trigger automatic recovery
-      try {
-        await this.clearSessionKeys();
-        this.logger.info('Automatic session recovery completed successfully');
-      } catch (error) {
-        this.logger.error('Automatic session recovery failed: ' + error.message);
-      }
-    }
-  }
-
-  private async trackStreamConflict() {
-    const now = Date.now();
-    const instanceId = this.instanceId;
-
-    let tracker = streamConflictTrackers.get(instanceId);
-    if (!tracker) {
-      tracker = { lastConflictTime: 0, conflictCount: 0 };
-      streamConflictTrackers.set(instanceId, tracker);
-    }
-
-    tracker.conflictCount++;
-    tracker.lastConflictTime = now;
-
-    // Check if we should trigger automatic recovery for stream conflicts
-    const CONFLICT_THRESHOLD = 5; // Increased from 3 to 5 conflicts
-    const TIME_WINDOW = 30 * 60 * 1000; // Increased from 10 to 30 minutes
-    const COOLDOWN_PERIOD = 15 * 60 * 1000; // 15 minutes cooldown
-
-    const decryptionTracker = decryptionErrorTrackers.get(instanceId);
-    const timeSinceLastRecovery = decryptionTracker ? now - decryptionTracker.lastRecoveryTime : COOLDOWN_PERIOD + 1;
-
-    if (tracker.conflictCount >= CONFLICT_THRESHOLD && timeSinceLastRecovery > COOLDOWN_PERIOD) {
-      // Skip recovery if network appears unstable (too many recent conflicts)
-      if (this.isNetworkUnstable()) {
-        this.logger.warn(
-          `High stream conflict rate detected (${tracker.conflictCount} conflicts in ${TIME_WINDOW / 60000}min), but network appears unstable. Skipping automatic recovery.`,
-        );
-        return;
-      }
-
-      this.logger.warn(
-        `High stream conflict rate detected (${tracker.conflictCount} conflicts in ${TIME_WINDOW / 60000}min). Triggering automatic session recovery.`,
-      );
-
-      // Reset counter
-      tracker.conflictCount = 0;
-
-      // Update decryption tracker recovery time to prevent overlapping recoveries
-      if (decryptionTracker) {
-        decryptionTracker.lastRecoveryTime = now;
-      }
-
-      // Trigger automatic recovery
-      try {
-        await this.clearSessionKeys();
-        this.logger.info('Automatic session recovery completed successfully due to stream conflicts');
-      } catch (error) {
-        this.logger.error('Automatic session recovery failed: ' + error.message);
-      }
-    }
-  }
-
-  private setupDecryptionErrorMonitoring() {
-    // Monitor Baileys logs for decryption errors and stream conflicts that aren't caught by messageStubParameters
-    const originalLogger = this.client?.logger;
-    if (originalLogger) {
-      const originalError = originalLogger.error.bind(originalLogger);
-      originalLogger.error = (...args: any[]) => {
-        // Check if this is a decryption error
-        const errorMessage = args.join(' ');
-        if (
-          errorMessage.includes('No session found to decrypt message') ||
-          errorMessage.includes('Bad MAC') ||
-          errorMessage.includes('No matching sessions found for message') ||
-          errorMessage.includes('Session error') ||
-          errorMessage.includes('failed to decrypt message')
-        ) {
-          // Track this decryption error
-          this.trackDecryptionError();
-        }
-
-        // Check if this is a stream conflict
-        if (
-          errorMessage.includes('Closing open session in favor of incoming prekey bundle') ||
-          errorMessage.includes('stream conflict') ||
-          errorMessage.includes('Stream conflict') ||
-          errorMessage.includes('stream errored out') ||
-          (errorMessage.includes('conflict') && errorMessage.includes('replaced')) ||
-          (errorMessage.includes('Connection Closed') && errorMessage.includes('processing offline nodes')) ||
-          errorMessage.includes('ETIMEDOUT') ||
-          errorMessage.includes('AggregateError') ||
-          errorMessage.includes('Pre-key upload timeout') ||
-          errorMessage.includes('Failed to check/upload pre-keys during initialization')
-        ) {
-          // Track this stream conflict
-          this.trackStreamConflict();
-        }
-
-        // Call original logger
-        originalError(...args);
-      };
-    }
-  }
-
-  public async clearSessionKeys() {
-    this.logger.info('Clearing corrupted session keys for instance: ' + this.instanceName);
-
-    try {
-      // Clean up message processor
-      this.messageProcessor.onDestroy();
-
-      // Close current client connection
-      this.client?.ws?.close();
-      this.client?.end(new Error('Clearing session keys'));
-
-      // Clear session keys based on storage configuration
-      const cache = this.configService.get<CacheConf>('CACHE');
-
-      if (cache?.REDIS.ENABLED && cache?.REDIS.SAVE_INSTANCES) {
-        // Clear Redis session keys
-        this.logger.info('Clearing Redis session keys');
-        await this.baileysCache.deleteAll();
-      } else {
-        // Clear file-based session keys
-        this.logger.info('Clearing file-based session keys');
-        const localFolder = path.join(INSTANCE_DIR, this.instanceId);
-        try {
-          await fs.rm(localFolder, { recursive: true, force: true });
-          this.logger.info('File-based session keys cleared');
-        } catch (error) {
-          this.logger.warn('Error clearing file-based session keys: ' + error.message);
-        }
-      }
-
-      // Keep the main credentials (creds) in database but clear corrupted keys
-      // The creds will be regenerated on next connection
-      this.logger.info('Session keys cleared, credentials preserved');
-
-      // Force reconnection with fresh session keys
-      await this.connectToWhatsapp();
-
-      this.logger.info('Session keys cleared and reconnection initiated');
-    } catch (error) {
-      this.logger.error('Error clearing session keys: ' + error.message);
-      throw new InternalServerErrorException('Failed to clear session keys', error.toString());
     }
   }
 
@@ -631,28 +400,6 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (connection === 'close') {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const errorMessage = lastDisconnect?.error?.message || '';
-
-      // Check for stream conflict errors that require session recovery
-      // Made more specific to avoid triggering on generic connection issues
-      const isStreamConflict =
-        errorMessage.includes('stream errored out') ||
-        (errorMessage.includes('conflict') && errorMessage.includes('replaced')) ||
-        errorMessage.includes('Pre-key upload timeout') ||
-        errorMessage.includes('Failed to check/upload pre-keys during initialization') ||
-        (errorMessage.includes('Connection Closed') && errorMessage.includes('processing offline nodes'));
-
-      if (isStreamConflict) {
-        this.logger.warn('Stream conflict detected, triggering session recovery');
-        try {
-          await this.clearSessionKeys();
-          this.logger.info('Stream conflict recovery completed');
-        } catch (recoveryError) {
-          this.logger.error('Stream conflict recovery failed: ' + recoveryError.message);
-        }
-        return;
-      }
-
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
       const shouldReconnect = !codesToNotReconnect.includes(statusCode);
       if (shouldReconnect) {
@@ -731,7 +478,7 @@ export class BaileysStartupService extends ChannelStartupService {
           { instanceName: this.instance.name, instanceId: this.instanceId },
           { instance: this.instance.name, status: 'open' },
         );
-        await this.syncChatwootLostMessages();
+        this.syncChatwootLostMessages();
       }
 
       this.sendDataWebhook(Events.CONNECTION_UPDATE, {
@@ -752,8 +499,8 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       // Use raw SQL to avoid JSON path issues
       const webMessageInfo = (await this.prismaRepository.$queryRaw`
-        SELECT * FROM "Message" 
-        WHERE "instanceId" = ${this.instanceId} 
+        SELECT * FROM "Message"
+        WHERE "instanceId" = ${this.instanceId}
         AND "key"->>'id' = ${key.id}
       `) as proto.IWebMessageInfo[];
 
@@ -888,7 +635,7 @@ export class BaileysStartupService extends ChannelStartupService {
       markOnlineOnConnect: this.localSettings.alwaysOnline,
       retryRequestDelayMs: 350,
       maxMsgRetryCount: 4,
-      fireInitQueries: false,
+      fireInitQueries: true,
       connectTimeoutMs: 30_000,
       keepAliveIntervalMs: 30_000,
       qrTimeout: 45_000,
@@ -938,9 +685,6 @@ export class BaileysStartupService extends ChannelStartupService {
       useVoiceCallsBaileys(this.localSettings.wavoipToken, this.client, this.connectionStatus.state as any, true);
     }
 
-    // Setup decryption error monitoring
-    this.setupDecryptionErrorMonitoring();
-
     this.eventHandler();
 
     this.client.ws.on('CB:call', (packet) => {
@@ -957,38 +701,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     this.phoneNumber = number;
 
-    // Manually execute init queries with error handling
-    await this.executeInitQueriesSafely();
-
     return this.client;
-  }
-
-  private async executeInitQueriesSafely() {
-    try {
-      this.logger.info('Executing init queries...');
-
-      // Execute init queries one by one with error handling
-      const queries = [
-        { name: 'fetchBlocklist', fn: () => this.client.fetchBlocklist() },
-        { name: 'fetchPrivacySettings', fn: () => this.client.fetchPrivacySettings() },
-      ];
-
-      for (const query of queries) {
-        try {
-          this.logger.debug(`Executing ${query.name}...`);
-          await query.fn();
-          this.logger.debug(`${query.name} completed successfully`);
-        } catch (error) {
-          this.logger.warn(`${query.name} failed: ${error.message}`);
-          // Continue with other queries even if one fails
-        }
-      }
-
-      this.logger.info('Init queries execution completed');
-    } catch (error) {
-      this.logger.error('Error during init queries execution: ' + error.message);
-      // Don't throw error to prevent connection failure
-    }
   }
 
   public async connectToWhatsapp(number?: string): Promise<WASocket> {
@@ -1286,10 +999,6 @@ export class BaileysStartupService extends ChannelStartupService {
             continue;
           }
 
-          if (m.key.remoteJid?.includes('@lid') && (m.key as any as ExtendedIMessageKey).senderPn) {
-            m.key.remoteJid = (m.key as any as ExtendedIMessageKey).senderPn;
-          }
-
           if (Long.isLong(m?.messageTimestamp)) {
             m.messageTimestamp = m.messageTimestamp?.toNumber();
           }
@@ -1352,10 +1061,6 @@ export class BaileysStartupService extends ChannelStartupService {
     ) => {
       try {
         for (const received of messages) {
-          if (received.key.remoteJid?.includes('@lid') && (received.key as ExtendedMessageKey).senderPn) {
-            (received.key as ExtendedMessageKey).previousRemoteJid = received.key.remoteJid;
-            received.key.remoteJid = (received.key as ExtendedMessageKey).senderPn;
-          }
           if (
             received?.messageStubParameters?.some?.((param) =>
               [
@@ -1370,10 +1075,6 @@ export class BaileysStartupService extends ChannelStartupService {
             )
           ) {
             this.logger.warn(`Message ignored with messageStubParameters: ${JSON.stringify(received, null, 2)}`);
-
-            // Track decryption errors for automatic recovery
-            await this.trackDecryptionError();
-
             continue;
           }
           if (received.message?.conversation || received.message?.extendedTextMessage?.text) {
@@ -1407,9 +1108,9 @@ export class BaileysStartupService extends ChannelStartupService {
             await this.sendDataWebhook(Events.MESSAGES_EDITED, editedMessage);
             const oldMessage = await this.getMessage(editedMessage.key, true);
             if ((oldMessage as any)?.id) {
-              const editedMessageTimestamp = Long.isLong(editedMessage?.timestampMs)
-                ? Math.floor(editedMessage.timestampMs.toNumber() / 1000)
-                : Math.floor((editedMessage.timestampMs as number) / 1000);
+              const editedMessageTimestamp = Long.isLong(received?.messageTimestamp)
+                ? Math.floor(received?.messageTimestamp.toNumber())
+                : Math.floor(received?.messageTimestamp as number);
 
               await this.prismaRepository.message.update({
                 where: { id: (oldMessage as any).id },
@@ -1440,7 +1141,7 @@ export class BaileysStartupService extends ChannelStartupService {
             continue;
           }
 
-          await this.baileysCache.set(messageKey, true, 5 * 60);
+          await this.baileysCache.set(messageKey, true, this.MESSAGE_CACHE_TTL_SECONDS);
 
           if (
             (type !== 'notify' && type !== 'append') ||
@@ -1560,7 +1261,7 @@ export class BaileysStartupService extends ChannelStartupService {
                 await this.updateMessagesReadedByTimestamp(remoteJid, timestamp);
               }
 
-              await this.baileysCache.set(messageKey, true, 5 * 60);
+              await this.baileysCache.set(messageKey, true, this.MESSAGE_CACHE_TTL_SECONDS);
             } else {
               this.logger.info(`Update readed messages duplicated ignored [avoid deadlock]: ${messageKey}`);
             }
@@ -1648,11 +1349,9 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
-          if (messageRaw.key.remoteJid?.includes('@lid') && messageRaw.key.remoteJidAlt) {
-            messageRaw.key.remoteJid = messageRaw.key.remoteJidAlt;
-          }
-
           this.logger.log(messageRaw);
+
+          sendTelemetry(`received.message.${messageRaw.messageType ?? 'unknown'}`);
 
           this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
 
@@ -1727,9 +1426,7 @@ export class BaileysStartupService extends ChannelStartupService {
           continue;
         }
 
-        if (key.remoteJid?.includes('@lid') && (key as any).remoteJidAlt) {
-          key.remoteJid = (key as any).remoteJidAlt;
-        }
+        if (update.message !== null && update.status === undefined) continue;
 
         const updateKey = `${this.instance.id}_${key.id}_${update.status}`;
 
@@ -1770,7 +1467,7 @@ export class BaileysStartupService extends ChannelStartupService {
             keyId: key.id,
             remoteJid: key?.remoteJid,
             fromMe: key.fromMe,
-            participant: key?.remoteJid,
+            participant: key?.participant,
             status: status[update.status] ?? 'DELETED',
             pollUpdates,
             instanceId: this.instanceId,
@@ -1781,14 +1478,18 @@ export class BaileysStartupService extends ChannelStartupService {
           if (configDatabaseData.HISTORIC || configDatabaseData.NEW_MESSAGE) {
             // Use raw SQL to avoid JSON path issues
             const messages = (await this.prismaRepository.$queryRaw`
-              SELECT * FROM "Message" 
-              WHERE "instanceId" = ${this.instanceId} 
+              SELECT * FROM "Message"
+              WHERE "instanceId" = ${this.instanceId}
               AND "key"->>'id' = ${key.id}
               LIMIT 1
             `) as any[];
             findMessage = messages[0] || null;
 
-            if (findMessage) message.messageId = findMessage.id;
+            if (!findMessage?.id) {
+              this.logger.warn(`Original message not found for update. Skipping. Key: ${JSON.stringify(key)}`);
+              continue;
+            }
+            message.messageId = findMessage.id;
           }
 
           if (update.message === null && update.status === undefined) {
@@ -1823,18 +1524,7 @@ export class BaileysStartupService extends ChannelStartupService {
                 if (status[update.status] === status[4]) {
                   this.logger.log(`Update as read in message.update ${remoteJid} - ${timestamp}`);
                   await this.updateMessagesReadedByTimestamp(remoteJid, timestamp);
-                  if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
-                    try {
-                      this.chatwootService.eventWhatsapp(
-                        'messages.agent_read',
-                        { instanceName: this.instance.name, instanceId: this.instanceId },
-                        { key },
-                      );
-                    } catch (e) {
-                      this.logger.warn(`Failed to notify Chatwoot agent_read: ${e}`);
-                    }
-                  }
-                  await this.baileysCache.set(messageKey, true, 5 * 60);
+                  await this.baileysCache.set(messageKey, true, this.MESSAGE_CACHE_TTL_SECONDS);
                 }
 
                 await this.prismaRepository.message.update({
@@ -1851,7 +1541,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
           this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
 
-          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE && message.messageId)
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)
             await this.prismaRepository.messageUpdate.create({ data: message });
 
           const existingChat = await this.prismaRepository.chat.findFirst({
@@ -1892,12 +1582,66 @@ export class BaileysStartupService extends ChannelStartupService {
       });
     },
 
-    'group-participants.update': (participantsUpdate: {
+    'group-participants.update': async (participantsUpdate: {
       id: string;
       participants: string[];
       action: ParticipantAction;
     }) => {
-      this.sendDataWebhook(Events.GROUP_PARTICIPANTS_UPDATE, participantsUpdate);
+      // ENHANCEMENT: Adds participantsData field while maintaining backward compatibility
+      // MAINTAINS: participants: string[] (original JID strings)
+      // ADDS: participantsData: { jid: string, phoneNumber: string, name?: string, imgUrl?: string }[]
+      // This enables LID to phoneNumber conversion without breaking existing webhook consumers
+
+      // Helper to normalize participantId as phone number
+      const normalizePhoneNumber = (id: string): string => {
+        // Remove @lid, @s.whatsapp.net suffixes and extract just the number part
+        return id.split('@')[0];
+      };
+
+      try {
+        // Usa o mesmo método que o endpoint /group/participants
+        const groupParticipants = await this.findParticipants({ groupJid: participantsUpdate.id });
+
+        // Validação para garantir que temos dados válidos
+        if (!groupParticipants?.participants || !Array.isArray(groupParticipants.participants)) {
+          throw new Error('Invalid participant data received from findParticipants');
+        }
+
+        // Filtra apenas os participantes que estão no evento
+        const resolvedParticipants = participantsUpdate.participants.map((participantId) => {
+          const participantData = groupParticipants.participants.find((p) => p.id === participantId);
+
+          let phoneNumber: string;
+          if (participantData?.phoneNumber) {
+            phoneNumber = participantData.phoneNumber;
+          } else {
+            phoneNumber = normalizePhoneNumber(participantId);
+          }
+
+          return {
+            jid: participantId,
+            phoneNumber,
+            name: participantData?.name,
+            imgUrl: participantData?.imgUrl,
+          };
+        });
+
+        // Mantém formato original + adiciona dados resolvidos
+        const enhancedParticipantsUpdate = {
+          ...participantsUpdate,
+          participants: participantsUpdate.participants, // Mantém array original de strings
+          // Adiciona dados resolvidos em campo separado
+          participantsData: resolvedParticipants,
+        };
+
+        this.sendDataWebhook(Events.GROUP_PARTICIPANTS_UPDATE, enhancedParticipantsUpdate);
+      } catch (error) {
+        this.logger.error(
+          `Failed to resolve participant data for GROUP_PARTICIPANTS_UPDATE webhook: ${error.message} | Group: ${participantsUpdate.id} | Participants: ${participantsUpdate.participants.length}`,
+        );
+        // Fallback - envia sem conversão
+        this.sendDataWebhook(Events.GROUP_PARTICIPANTS_UPDATE, participantsUpdate);
+      }
 
       this.updateGroupMetadataCache(participantsUpdate.id);
     },
@@ -1979,6 +1723,9 @@ export class BaileysStartupService extends ChannelStartupService {
           }
 
           if (settings?.msgCall?.trim().length > 0 && call.status == 'offer') {
+            if (call.from.endsWith('@lid')) {
+              call.from = await this.client.signalRepository.lidMapping.getPNForLID(call.from as string);
+            }
             const msg = await this.client.sendMessage(call.from, { text: settings.msgCall });
 
             this.client.ev.emit('messages.upsert', { messages: [msg], type: 'notify' });
@@ -2002,28 +1749,6 @@ export class BaileysStartupService extends ChannelStartupService {
 
         if (events['messages.upsert']) {
           const payload = events['messages.upsert'];
-
-          // Check for decryption errors in messages and track them
-          const messagesWithErrors = payload.messages.filter((message) =>
-            message?.messageStubParameters?.some?.((param) =>
-              [
-                'No matching sessions found for message',
-                'Bad MAC',
-                'failed to decrypt message',
-                'SessionError',
-                'Invalid PreKey ID',
-                'No session record',
-                'No session found to decrypt message',
-              ].some((err) => param?.includes?.(err)),
-            ),
-          );
-
-          if (messagesWithErrors.length > 0) {
-            // Track decryption errors for automatic recovery
-            for (let i = 0; i < messagesWithErrors.length; i++) {
-              await this.trackDecryptionError();
-            }
-          }
 
           this.messageProcessor.processMessage(payload, settings);
           // this.messageHandle['messages.upsert'](payload, settings);
@@ -2268,7 +1993,7 @@ export class BaileysStartupService extends ChannelStartupService {
         quoted,
       });
       const id = await this.client.relayMessage(sender, message, { messageId });
-      m.key = { id: id, remoteJid: sender, participant: isJidNewsletter(sender) ? sender : undefined, fromMe: true };
+      m.key = { id: id, remoteJid: sender, participant: isPnUser(sender) ? sender : undefined, fromMe: true };
       for (const [key, value] of Object.entries(m)) {
         if (!value || (isArray(value) && value.length) === 0) {
           delete m[key];
@@ -2607,11 +2332,6 @@ export class BaileysStartupService extends ChannelStartupService {
 
       this.logger.log(messageRaw);
 
-      // Add echo_id to key if present in options
-      if (options?.echo_id) {
-        messageRaw.key.echo_id = options.echo_id;
-      }
-
       this.sendDataWebhook(Events.SEND_MESSAGE, messageRaw);
 
       if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && isIntegration) {
@@ -2713,7 +2433,6 @@ export class BaileysStartupService extends ChannelStartupService {
         linkPreview: data?.linkPreview,
         mentionsEveryOne: data?.mentionsEveryOne,
         mentioned: data?.mentioned,
-        echo_id: data?.echo_id,
       },
       isIntegration,
     );
@@ -3009,10 +2728,10 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
-  private isAnimatedWebp(buffer: Uint8Array): boolean {
+  private isAnimatedWebp(buffer: Buffer): boolean {
     if (buffer.length < 12) return false;
 
-    return buffer.indexOf(Buffer.from('ANIM')[0]) !== -1;
+    return buffer.indexOf(Buffer.from('ANIM')) !== -1;
   }
 
   private isAnimated(image: string, buffer: Buffer): boolean {
@@ -3020,7 +2739,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (lowerCaseImage.includes('.gif')) return true;
 
-    if (lowerCaseImage.includes('.webp')) return this.isAnimatedWebp(new Uint8Array(buffer));
+    if (lowerCaseImage.includes('.webp')) return this.isAnimatedWebp(buffer);
 
     return false;
   }
@@ -3151,7 +2870,7 @@ export class BaileysStartupService extends ChannelStartupService {
       ffmpegProcess.on('close', (code) => {
         if (code === 0) {
           this.logger.verbose('Audio converted to mp4');
-          const outputBuffer = (Buffer.concat as any)(outputChunks);
+          const outputBuffer = Buffer.concat(outputChunks);
           resolve(outputBuffer);
         } else {
           this.logger.error(`ffmpeg exited with code ${code}`);
@@ -3219,7 +2938,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
         outputAudioStream.on('data', (chunk) => chunks.push(chunk));
         outputAudioStream.on('end', () => {
-          const outputBuffer = (Buffer.concat as any)(chunks);
+          const outputBuffer = Buffer.concat(chunks);
           resolve(outputBuffer);
         });
 
@@ -3696,18 +3415,13 @@ export class BaileysStartupService extends ChannelStartupService {
           }
 
           const numberJid = numberVerified?.jid || user.jid;
-          const lid =
-            typeof (numberVerified as any)?.lid === 'string'
-              ? (numberVerified as any).lid
-              : numberJid.includes('@lid')
-                ? numberJid.split('@')[1]
-                : undefined;
+
           return new OnWhatsAppDto(
             numberJid,
             !!numberVerified?.exists,
             user.number,
             contacts.find((c) => c.remoteJid === numberJid)?.pushName,
-            lid,
+            undefined,
           );
         }),
       );
@@ -3745,7 +3459,7 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       const keys: proto.IMessageKey[] = [];
       data.readMessages.forEach((read) => {
-        if (isJidGroup(read.remoteJid) || isJidNewsletter(read.remoteJid)) {
+        if (isJidGroup(read.remoteJid) || isPnUser(read.remoteJid)) {
           keys.push({ remoteJid: read.remoteJid, fromMe: read.fromMe, id: read.id });
         }
       });
@@ -3859,7 +3573,7 @@ export class BaileysStartupService extends ChannelStartupService {
                 keyId: messageId,
                 remoteJid: response.key.remoteJid,
                 fromMe: response.key.fromMe,
-                participant: response.key?.remoteJid,
+                participant: response.key?.participant,
                 status: 'DELETED',
                 instanceId: this.instanceId,
               };
@@ -3919,7 +3633,10 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       }
 
-      if ('messageContextInfo' in msg.message && Object.keys(msg.message).length === 1) {
+      if (
+        Object.keys(msg.message).length === 1 &&
+        Object.prototype.hasOwnProperty.call(msg.message, 'messageContextInfo')
+      ) {
         throw 'The message is messageContextInfo';
       }
 
@@ -4294,7 +4011,7 @@ export class BaileysStartupService extends ChannelStartupService {
                 keyId: messageId,
                 remoteJid: messageSent.key.remoteJid,
                 fromMe: messageSent.key.fromMe,
-                participant: messageSent.key?.remoteJid,
+                participant: messageSent.key?.participant,
                 status: 'EDITED',
                 instanceId: this.instanceId,
               };
@@ -4790,7 +4507,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     // Use raw SQL to avoid JSON path issues
     const result = await this.prismaRepository.$executeRaw`
-      UPDATE "Message" 
+      UPDATE "Message"
       SET "status" = ${status[4]}
       WHERE "instanceId" = ${this.instanceId}
       AND "key"->>'remoteJid' = ${remoteJid}
@@ -4815,7 +4532,7 @@ export class BaileysStartupService extends ChannelStartupService {
       this.prismaRepository.chat.findFirst({ where: { remoteJid } }),
       // Use raw SQL to avoid JSON path issues
       this.prismaRepository.$queryRaw`
-        SELECT COUNT(*)::int as count FROM "Message" 
+        SELECT COUNT(*)::int as count FROM "Message"
         WHERE "instanceId" = ${this.instanceId}
         AND "key"->>'remoteJid' = ${remoteJid}
         AND ("key"->>'fromMe')::boolean = false
@@ -4891,7 +4608,7 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public async baileysAssertSessions(jids: string[]) {
-    const response = await (this.client as any).assertSessions(jids, false);
+    const response = await this.client.assertSessions(jids);
 
     return response;
   }
@@ -4936,11 +4653,7 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       const ciphertextBuffer = Buffer.from(ciphertext, 'base64');
 
-      const response = await this.client.signalRepository.decryptMessage({
-        jid,
-        type,
-        ciphertext: new Uint8Array(ciphertextBuffer),
-      });
+      const response = await this.client.signalRepository.decryptMessage({ jid, type, ciphertext: ciphertextBuffer });
 
       return response instanceof Uint8Array ? Buffer.from(response).toString('base64') : response;
     } catch (error) {
@@ -4954,75 +4667,6 @@ export class BaileysStartupService extends ChannelStartupService {
     const response = { me: this.client.authState.creds.me, account: this.client.authState.creds.account };
 
     return response;
-  }
-
-  public getDecryptionErrorStatus() {
-    const tracker = decryptionErrorTrackers.get(this.instanceId);
-    if (!tracker) {
-      return {
-        errorCount: 0,
-        lastErrorTime: null,
-        lastRecoveryTime: null,
-        nextRecoveryThreshold: 10,
-        cooldownRemaining: 0,
-      };
-    }
-
-    const now = Date.now();
-    const cooldownRemaining = Math.max(0, 30 * 60 * 1000 - (now - tracker.lastRecoveryTime));
-
-    return {
-      errorCount: tracker.count,
-      lastErrorTime: tracker.lastErrorTime ? new Date(tracker.lastErrorTime).toISOString() : null,
-      lastRecoveryTime: tracker.lastRecoveryTime ? new Date(tracker.lastRecoveryTime).toISOString() : null,
-      nextRecoveryThreshold: 10,
-      cooldownRemaining: Math.ceil(cooldownRemaining / 1000 / 60), // minutes
-    };
-  }
-
-  public getStreamConflictStatus() {
-    const tracker = streamConflictTrackers.get(this.instanceId);
-    if (!tracker) {
-      return {
-        conflictCount: 0,
-        lastConflictTime: null,
-        nextRecoveryThreshold: 3,
-      };
-    }
-
-    return {
-      conflictCount: tracker.conflictCount,
-      lastConflictTime: tracker.lastConflictTime ? new Date(tracker.lastConflictTime).toISOString() : null,
-      nextRecoveryThreshold: 3,
-    };
-  }
-
-  public async manualSessionRecovery() {
-    const tracker = decryptionErrorTrackers.get(this.instanceId);
-    const now = Date.now();
-
-    if (tracker && now - tracker.lastRecoveryTime < 30 * 60 * 1000) {
-      const cooldownRemaining = Math.ceil((30 * 60 * 1000 - (now - tracker.lastRecoveryTime)) / 1000 / 60);
-      throw new BadRequestException(`Manual recovery is on cooldown. ${cooldownRemaining} minutes remaining.`);
-    }
-
-    this.logger.info('Manual session recovery triggered');
-
-    try {
-      await this.clearSessionKeys();
-      this.logger.info('Manual session recovery completed successfully');
-
-      // Reset tracker
-      if (tracker) {
-        tracker.count = 0;
-        tracker.lastRecoveryTime = now;
-      }
-
-      return { success: true, message: 'Session recovery completed successfully' };
-    } catch (error) {
-      this.logger.error('Manual session recovery failed: ' + error.message);
-      throw new InternalServerErrorException('Failed to perform manual session recovery', error.toString());
-    }
   }
 
   //Business Controller
@@ -5168,7 +4812,7 @@ export class BaileysStartupService extends ChannelStartupService {
           {
             OR: [
               keyFilters?.remoteJid ? { key: { path: ['remoteJid'], equals: keyFilters?.remoteJid } } : {},
-              keyFilters?.senderPn ? { key: { path: ['senderPn'], equals: keyFilters?.senderPn } } : {},
+              keyFilters?.remoteJidAlt ? { key: { path: ['remoteJidAlt'], equals: keyFilters?.remoteJidAlt } } : {},
             ],
           },
         ],
@@ -5198,7 +4842,7 @@ export class BaileysStartupService extends ChannelStartupService {
           {
             OR: [
               keyFilters?.remoteJid ? { key: { path: ['remoteJid'], equals: keyFilters?.remoteJid } } : {},
-              keyFilters?.senderPn ? { key: { path: ['senderPn'], equals: keyFilters?.senderPn } } : {},
+              keyFilters?.remoteJidAlt ? { key: { path: ['remoteJidAlt'], equals: keyFilters?.remoteJidAlt } } : {},
             ],
           },
         ],
