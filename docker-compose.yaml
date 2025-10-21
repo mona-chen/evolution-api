@@ -1,5 +1,5 @@
 services:
-  
+
   api:
     container_name: evolution_api
     build:
@@ -25,7 +25,7 @@ services:
     image: evoapicloud/evolution-manager:latest
     restart: always
     ports:
-      - "3000:80"
+      - "5959:80"
     networks:
       - evolution-net
 
@@ -35,8 +35,8 @@ services:
       - evolution-net
     container_name: redis
     command: >
-      redis-server 
-      --port 6379 
+      redis-server
+      --port 6379
       --appendonly yes
       --maxmemory 2gb
       --maxmemory-policy allkeys-lru
