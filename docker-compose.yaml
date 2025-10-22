@@ -1,5 +1,4 @@
 services:
-
   api:
     container_name: evolution_api
     build:
@@ -19,15 +18,14 @@ services:
     expose:
       - 5858
 
-
-  frontend:
-    container_name: evolution_frontend
-    image: evoapicloud/evolution-manager:latest
-    restart: always
-    ports:
-      - "5959:80"
-    networks:
-      - evolution-net
+  # frontend:
+  #   container_name: evolution_frontend
+  #   image: evoapicloud/evolution-manager:latest
+  #   restart: always
+  #   ports:
+  #     - "5959:80"
+  #   networks:
+  #     - evolution-net
 
   redis:
     image: redis:latest
